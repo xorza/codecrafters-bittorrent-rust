@@ -14,7 +14,14 @@ fn decode_bencoded_value(encoded_value: &str) -> Result<serde_json::Value, Box<d
 
 
         match first_char {
-            'i' => {}
+            'i' => {
+                let (value, rest) = value_to_decode[1..].split_once('e')
+                    .ok_or("Invalid integer format")?;
+                let value = value.parse::<i64>()?;
+                value_to_decode = rest;
+
+                return Ok(serde_json::Value::Number(value.into()));
+            }
             'l' => {}
             '0'..='9' => {
                 let (len, rest) = value_to_decode.split_once(':')
@@ -42,9 +49,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let command = &args[1];
 
     if command == "decode" {
-        // You can use print statements as follows for debugging, they'll be visible when running tests.
-        // println!("Logs from your program will appear here!");
-
         // Uncomment this block to pass the first stage
         let encoded_value = &args[2];
         let decoded_value = decode_bencoded_value(encoded_value)?;
