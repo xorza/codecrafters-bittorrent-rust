@@ -5,14 +5,14 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 enum Value {
-    String(String),
+    Data(Vec<u8>),
     Integer(i64),
     List(Vec<Value>),
     Dictionary(Vec<(String, Value)>),
 }
 
 enum ReadToken {
-    String(String),
+    Data(Vec<u8>),
     Integer(i64),
     List,
     Dictionary,
@@ -24,7 +24,7 @@ impl TryFrom<ReadToken> for Value {
 
     fn try_from(token: ReadToken) -> Result<Self, Box<dyn Error>> {
         match token {
-            ReadToken::String(s) => Ok(Value::String(s)),
+            ReadToken::Data(s) => Ok(Value::Data(s)),
             ReadToken::Integer(i) => Ok(Value::Integer(i)),
             ReadToken::List => Ok(Value::List(Vec::new())),
             ReadToken::Dictionary => Ok(Value::Dictionary(Vec::new())),
@@ -34,16 +34,15 @@ impl TryFrom<ReadToken> for Value {
 }
 
 
-#[allow(dead_code)]
-fn decode_bencoded_value(mut value_to_decode: &str) -> Result<Value, Box<dyn Error>> {
+fn decode_bencoded_value(mut value_to_decode: &[u8]) -> Result<Value, Box<dyn Error>> {
     let (root_value, left_to_decode) = read_value(&mut value_to_decode)?;
     value_to_decode = left_to_decode;
 
     let mut stack: Vec<(Option<String>, Value)> = Vec::new();
 
     match root_value {
-        ReadToken::String(s) => {
-            return Ok(Value::String(s));
+        ReadToken::Data(s) => {
+            return Ok(Value::Data(s));
         }
         ReadToken::Integer(i) => {
             return Ok(Value::Integer(i));
@@ -95,7 +94,10 @@ fn decode_bencoded_value(mut value_to_decode: &str) -> Result<Value, Box<dyn Err
                 value_to_decode = left_to_decode;
 
                 match token {
-                    ReadToken::String(s) => (Some(s), value_token),
+                    ReadToken::Data(s) => {
+                        let string_key = String::from_utf8(s)?;
+                        (Some(string_key), value_token)
+                    }
                     _ => return Err("Invalid key".into()),
                 }
             }
@@ -109,7 +111,7 @@ fn decode_bencoded_value(mut value_to_decode: &str) -> Result<Value, Box<dyn Err
             Value::Dictionary(_) => {
                 stack.push((key, value));
             }
-            Value::String(_) |
+            Value::Data(_) |
             Value::Integer(_) => {
                 match prev_value {
                     Value::List(list) => {
@@ -125,26 +127,37 @@ fn decode_bencoded_value(mut value_to_decode: &str) -> Result<Value, Box<dyn Err
     }
 }
 
-fn read_value(mut value_to_decode: &str) -> Result<(ReadToken, &str), Box<dyn Error>> {
-    let first_char = value_to_decode.chars().nth(0).unwrap();
+fn split_once(slice: &[u8], byte: u8) -> Option<(&[u8], &[u8])> {
+    for (index, &item) in slice.iter().enumerate() {
+        if item == byte {
+            return Some((&slice[..index], &slice[index + 1..]));
+        }
+    }
+    None
+}
+
+fn read_value(mut value_to_decode: &[u8]) -> Result<(ReadToken, &[u8]), Box<dyn Error>> {
+    let first_char = value_to_decode[0] as char;
 
     let new_value = match first_char {
         '0'..='9' => {
-            let (len, rest) = value_to_decode.split_once(':')
+            let (len, rest) = split_once(value_to_decode, b':')
                 .ok_or("Invalid string format")?;
-            let len = len.parse::<usize>()?;
+            let len_str = std::str::from_utf8(len)?;
+            let len = len_str.parse::<usize>()?;
             if rest.len() < len {
                 return Err("Invalid string format".into());
             }
             let (value, rest) = rest.split_at(len);
             value_to_decode = rest;
 
-            ReadToken::String(value.to_string())
+            ReadToken::Data(value.into())
         }
         'i' => {
-            let (value, rest) = value_to_decode[1..].split_once('e')
+            let (value, rest) = split_once(&value_to_decode[1..], b'e')
                 .ok_or("Invalid integer format")?;
-            let value = value.parse::<i64>()?;
+            let str_value = std::str::from_utf8(value)?;
+            let value = str_value.parse::<i64>()?;
             value_to_decode = rest;
 
             ReadToken::Integer(value)
@@ -175,7 +188,7 @@ fn read_value(mut value_to_decode: &str) -> Result<(ReadToken, &str), Box<dyn Er
 
 fn value_to_json(value: &Value) -> serde_json::Value {
     match value {
-        Value::String(s) => s.clone().into(),
+        Value::Data(s) => String::from_utf8_lossy(s).into(),
         Value::Integer(i) => i.clone().into(),
         Value::List(list) => {
             let list: Vec<serde_json::Value> = list.iter()
@@ -194,6 +207,13 @@ fn value_to_json(value: &Value) -> serde_json::Value {
     }
 }
 
+fn read_torrent_info(torrent_file: &str) -> Result<Value, Box<dyn Error>> {
+    //read file to [u8]
+    let file = std::fs::read(torrent_file)?;
+
+    Err("Not implemented".into())
+}
+
 // Usage: your_bittorrent.sh decode "<encoded_value>"
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
@@ -201,11 +221,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let command = args[1].as_str();
     match command {
         "decode" => {
-            let encoded_value = &args[2];
+            let encoded_value = args[2].as_bytes();
             let decoded_value = decode_bencoded_value(encoded_value)?;
             println!("{}", value_to_json(&decoded_value).to_string());
         }
         "info" => {
+            let torrent_file = &args[2].as_str();
+            let values = read_torrent_info(torrent_file)?;
+            println!("{}", value_to_json(&values).to_string());
             // Tracker URL: http://bittorrent-test-tracker.codecrafters.io/announce
             // Length: 92063
         }
@@ -222,10 +245,25 @@ fn main() -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
 
+    fn test_decode_torrent_file() {
+        let torrent_file = "sample.torrent";
+        let decoded_value = read_torrent_info(torrent_file).unwrap();
+        let json_decoded_value = value_to_json(&decoded_value);
+        assert_eq!(json_decoded_value, serde_json::json!({
+            "announce": "http://bittorrent-test-tracker.codecrafters.io/announce",
+            "info": {
+                "length": 92063,
+                "name": "test.txt",
+                "piece length": 16384,
+                "pieces": "..."
+            }
+        }));
+    }
+
     #[test]
     fn test_decode_bencoded_value_string() {
         let encoded_value = "4:spam";
-        let decoded_value = decode_bencoded_value(encoded_value).unwrap();
+        let decoded_value = decode_bencoded_value(encoded_value.as_bytes()).unwrap();
         let json_decoded_value = value_to_json(&decoded_value);
         assert_eq!(json_decoded_value, serde_json::json!("spam"));
     }
@@ -233,7 +271,7 @@ mod tests {
     #[test]
     fn test_decode_bencoded_value_integer() {
         let encoded_value = "i52e";
-        let decoded_value = decode_bencoded_value(encoded_value).unwrap();
+        let decoded_value = decode_bencoded_value(encoded_value.as_bytes()).unwrap();
         let json_decoded_value = value_to_json(&decoded_value);
         assert_eq!(json_decoded_value, serde_json::json!(52));
     }
@@ -241,15 +279,15 @@ mod tests {
     #[test]
     fn test_decode_bencoded_list() {
         let encoded_value = "l5:helloi52ee";
-        let decoded_value = decode_bencoded_value(encoded_value).unwrap();
+        let decoded_value = decode_bencoded_value(encoded_value.as_bytes()).unwrap();
         let json_decoded_value = value_to_json(&decoded_value);
         assert_eq!(json_decoded_value, serde_json::json!(["hello", 52]));
     }
 
     #[test]
-    fn test_decode_bencoded_value() {
+    fn test_decode_bencoded_list_in_dict() {
         let encoded_value = "d4:spaml1:a1:bee";
-        let decoded_value = decode_bencoded_value(encoded_value).unwrap();
+        let decoded_value = decode_bencoded_value(encoded_value.as_bytes()).unwrap();
         let json_decoded_value = value_to_json(&decoded_value);
         assert_eq!(json_decoded_value, serde_json::json!({
             "spam": ["a", "b"]
