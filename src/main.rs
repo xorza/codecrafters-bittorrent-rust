@@ -11,107 +11,121 @@ enum Value {
     Dictionary(Vec<(String, Value)>),
 }
 
-// enum StackFrame {
-//     Root(Value),
-//     List(Vec<Value>),
-//     Dictionary(Vec<(String, Value)>),
-// }
+enum ReadToken {
+    String(String),
+    Integer(i64),
+    List,
+    Dictionary,
+    End,
+}
+
+impl TryFrom<ReadToken> for Value {
+    type Error = Box<dyn Error>;
+
+    fn try_from(token: ReadToken) -> Result<Self, Box<dyn Error>> {
+        match token {
+            ReadToken::String(s) => Ok(Value::String(s)),
+            ReadToken::Integer(i) => Ok(Value::Integer(i)),
+            ReadToken::List => Ok(Value::List(Vec::new())),
+            ReadToken::Dictionary => Ok(Value::Dictionary(Vec::new())),
+            ReadToken::End => Err("Invalid value".into()),
+        }
+    }
+}
+
 
 #[allow(dead_code)]
 fn decode_bencoded_value(mut value_to_decode: &str) -> Result<serde_json::Value, Box<dyn Error>> {
     let (root_value, left_to_decode) = read_value(&mut value_to_decode)?;
     value_to_decode = left_to_decode;
 
-    let mut value_stack: Vec<Value> = Vec::new();
-    let root_value = root_value.ok_or("Invalid value")?;
+    let mut stack: Vec<(Option<String>, Value)> = Vec::new();
 
     match root_value {
-        Value::String(s) => {
+        ReadToken::String(s) => {
             return Ok(s.into());
         }
-        Value::Integer(i) => {
+        ReadToken::Integer(i) => {
             return Ok(i.into());
         }
-        Value::List(_) |
-        Value::Dictionary(_) => {
-            value_stack.push(root_value);
+        ReadToken::List => {
+            stack.push((None, Value::List(Vec::new())));
         }
+        ReadToken::Dictionary => {
+            stack.push((None, Value::Dictionary(Vec::new())));
+        }
+        _ => return Err("Invalid value".into()),
     }
 
-    let mut key_stack: Vec<String> = Vec::new();
-    let mut key: Option<String> = None;
+    loop {
+        if value_to_decode.is_empty() {
+            return Err("Invalid value".into());
+        }
 
-    let result: Option<Value> =
-        loop {
-            if value_to_decode.is_empty() {
-                break None;
-            }
-
-            let (new_value, left_to_decode) = read_value(value_to_decode)?;
+        let token = loop {
+            let (token, left_to_decode) = read_value(value_to_decode)?;
             value_to_decode = left_to_decode;
 
-            if let Some(new_value) = new_value {
-                match new_value {
-                    Value::List(_) |
-                    Value::Dictionary(_) => {
-                        if let Some(key) = key.take() {
-                            key_stack.push(key);
-                        }
-                        value_stack.push(new_value);
-                    }
-                    Value::String(s) => {
-                        match value_stack.last_mut() {
-                            Some(Value::List(list)) => {
-                                list.push(Value::String(s));
-                            }
-                            Some(Value::Dictionary(dict)) => {
-                                if let Some(key) = key.take() {
-                                    dict.push((key, Value::String(s)));
-                                } else {
-                                    key = Some(s);
-                                }
-                            }
-                            _ => return Err("Invalid value".into()),
-                        }
-                    }
-                    Value::Integer(i) => {
-                        match value_stack.last_mut() {
-                            Some(Value::List(list)) => {
-                                list.push(Value::Integer(i));
-                            }
-                            Some(Value::Dictionary(dict)) => {
-                                if let Some(key) = key.take() {
-                                    dict.push((key, Value::Integer(i)));
-                                } else {
-                                    return Err("Invalid value".into());
-                                }
-                            }
-                            _ => return Err("Invalid value".into()),
-                        }
-                    }
-                }
-            } else {
-                let value = value_stack.pop()
+            if matches!(token, ReadToken::End) {
+                let (key, value) = stack.pop()
                     .ok_or("Invalid value")?;
-                match value_stack.last_mut() {
-                    Some(Value::List(list)) => {
+                match stack.last_mut() {
+                    Some((None, Value::List(list))) => {
                         list.push(value);
                     }
-                    Some(Value::Dictionary(dict)) => {
-                        let key = key_stack.pop()
-                            .ok_or("Invalid value")?;
-                        dict.push((key, value));
+                    Some((_, Value::Dictionary(dict))) => {
+                        dict.push((
+                            key.expect("Invalid key"),
+                            value
+                        ));
                     }
-                    None => break Some(value),
+                    None => return Ok(value_to_json(&value)),
                     _ => return Err("Invalid value".into()),
                 }
+            } else {
+                break token;
             }
         };
 
-    Ok(value_to_json(&result.ok_or("Invalid value")?))
+        let (_, prev_value) = stack.last_mut().expect("Invalid state");
+        let (key, value_token) = match prev_value {
+            Value::List(_) => (None, token),
+            Value::Dictionary(_) => {
+                let (value_token, left_to_decode) = read_value(value_to_decode)?;
+                value_to_decode = left_to_decode;
+
+                match token {
+                    ReadToken::String(s) => (Some(s), value_token),
+                    _ => return Err("Invalid key".into()),
+                }
+            }
+            _ => panic!("Invalid state"),
+        };
+
+        let value = Value::try_from(value_token)?;
+
+        match value {
+            Value::List(_) |
+            Value::Dictionary(_) => {
+                stack.push((key, value));
+            }
+            Value::String(_) |
+            Value::Integer(_) => {
+                match prev_value {
+                    Value::List(list) => {
+                        list.push(value);
+                    }
+                    Value::Dictionary(dict) => {
+                        dict.push((key.expect("Invalid state, key expected"), value));
+                    }
+                    _ => panic!("Invalid state")
+                }
+            }
+        }
+    }
 }
 
-fn read_value(mut value_to_decode: &str) -> Result<(Option<Value>, &str), Box<dyn Error>> {
+fn read_value(mut value_to_decode: &str) -> Result<(ReadToken, &str), Box<dyn Error>> {
     let first_char = value_to_decode.chars().nth(0).unwrap();
 
     let new_value = match first_char {
@@ -125,7 +139,7 @@ fn read_value(mut value_to_decode: &str) -> Result<(Option<Value>, &str), Box<dy
             let (value, rest) = rest.split_at(len);
             value_to_decode = rest;
 
-            Some(Value::String(value.to_string()))
+            ReadToken::String(value.to_string())
         }
         'i' => {
             let (value, rest) = value_to_decode[1..].split_once('e')
@@ -133,19 +147,22 @@ fn read_value(mut value_to_decode: &str) -> Result<(Option<Value>, &str), Box<dy
             let value = value.parse::<i64>()?;
             value_to_decode = rest;
 
-            Some(Value::Integer(value))
+            ReadToken::Integer(value)
         }
         'l' => {
             value_to_decode = &value_to_decode[1..];
-            Some(Value::List(Vec::new()))
+
+            ReadToken::List
         }
         'd' => {
             value_to_decode = &value_to_decode[1..];
-            Some(Value::Dictionary(Vec::new()))
+
+            ReadToken::Dictionary
         }
         'e' => {
             value_to_decode = &value_to_decode[1..];
-            None
+
+            ReadToken::End
         }
 
         _ => {
