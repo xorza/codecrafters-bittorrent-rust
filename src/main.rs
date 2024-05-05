@@ -35,7 +35,7 @@ impl TryFrom<ReadToken> for Value {
 
 
 #[allow(dead_code)]
-fn decode_bencoded_value(mut value_to_decode: &str) -> Result<serde_json::Value, Box<dyn Error>> {
+fn decode_bencoded_value(mut value_to_decode: &str) -> Result<Value, Box<dyn Error>> {
     let (root_value, left_to_decode) = read_value(&mut value_to_decode)?;
     value_to_decode = left_to_decode;
 
@@ -43,10 +43,10 @@ fn decode_bencoded_value(mut value_to_decode: &str) -> Result<serde_json::Value,
 
     match root_value {
         ReadToken::String(s) => {
-            return Ok(s.into());
+            return Ok(Value::String(s));
         }
         ReadToken::Integer(i) => {
-            return Ok(i.into());
+            return Ok(Value::Integer(i));
         }
         ReadToken::List => {
             stack.push((None, Value::List(Vec::new())));
@@ -79,7 +79,7 @@ fn decode_bencoded_value(mut value_to_decode: &str) -> Result<serde_json::Value,
                             value
                         ));
                     }
-                    None => return Ok(value_to_json(&value)),
+                    None => return Ok(value),
                     _ => return Err("Invalid value".into()),
                 }
             } else {
@@ -195,17 +195,23 @@ fn value_to_json(value: &Value) -> serde_json::Value {
 }
 
 // Usage: your_bittorrent.sh decode "<encoded_value>"
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
-    let command = &args[1];
 
-    if command == "decode" {
-        // Uncomment this block to pass the first stage
-        let encoded_value = &args[2];
-        let decoded_value = decode_bencoded_value(encoded_value)?;
-        println!("{}", decoded_value.to_string());
-    } else {
-        println!("unknown command: {}", args[1])
+    let command = args[1].as_str();
+    match command {
+        "decode" => {
+            let encoded_value = &args[2];
+            let decoded_value = decode_bencoded_value(encoded_value)?;
+            println!("{}", value_to_json(&decoded_value).to_string());
+        }
+        "info" => {
+            // Tracker URL: http://bittorrent-test-tracker.codecrafters.io/announce
+            // Length: 92063
+        }
+        _ => {
+            println!("unknown command: {}", command);
+        }
     }
 
     Ok(())
@@ -220,28 +226,32 @@ mod tests {
     fn test_decode_bencoded_value_string() {
         let encoded_value = "4:spam";
         let decoded_value = decode_bencoded_value(encoded_value).unwrap();
-        assert_eq!(decoded_value, serde_json::json!("spam"));
+        let json_decoded_value = value_to_json(&decoded_value);
+        assert_eq!(json_decoded_value, serde_json::json!("spam"));
     }
 
     #[test]
     fn test_decode_bencoded_value_integer() {
         let encoded_value = "i52e";
         let decoded_value = decode_bencoded_value(encoded_value).unwrap();
-        assert_eq!(decoded_value, serde_json::json!(52));
+        let json_decoded_value = value_to_json(&decoded_value);
+        assert_eq!(json_decoded_value, serde_json::json!(52));
     }
 
     #[test]
     fn test_decode_bencoded_list() {
         let encoded_value = "l5:helloi52ee";
         let decoded_value = decode_bencoded_value(encoded_value).unwrap();
-        assert_eq!(decoded_value, serde_json::json!(["hello", 52]));
+        let json_decoded_value = value_to_json(&decoded_value);
+        assert_eq!(json_decoded_value, serde_json::json!(["hello", 52]));
     }
 
     #[test]
     fn test_decode_bencoded_value() {
         let encoded_value = "d4:spaml1:a1:bee";
         let decoded_value = decode_bencoded_value(encoded_value).unwrap();
-        assert_eq!(decoded_value, serde_json::json!({
+        let json_decoded_value = value_to_json(&decoded_value);
+        assert_eq!(json_decoded_value, serde_json::json!({
             "spam": ["a", "b"]
         }));
     }
