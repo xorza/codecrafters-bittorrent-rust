@@ -4,8 +4,12 @@ use serde_json;
 use std::env;
 use std::error::Error;
 use std::fmt::Display;
+use bytes::{BufMut, BytesMut};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+const PEER_ID: &str = "01234567890123456789";
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
 enum BencodeValue {
@@ -423,7 +427,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 tracker_url.as_str(),
                 info_sha1_url,
                 serde_urlencoded::to_string(&[
-                    ("peer_id", "01234567890123456789"),
+                    ("peer_id", PEER_ID),
                     ("port", "6881"),
                     ("uploaded", "0"),
                     ("downloaded", "0"),
@@ -461,6 +465,40 @@ async fn main() -> Result<(), Box<dyn Error>> {
             for (ip, port) in peers {
                 println!("  {}:{}", ip, port);
             }
+        }
+        "handshake" => {
+            let torrent_file = args[2].as_str();
+            let peer_address = args[3].as_str();
+            let decoded_value = read_torrent_info(torrent_file)?;
+            let info_sha1 = decoded_value
+                .get_by_name("info").unwrap()
+                .get_sha1();
+
+            let mut buf = BytesMut::with_capacity(68);
+            buf.put_u8(19);
+            buf.put_slice(b"BitTorrent protocol");
+            buf.put_slice(&[0u8; 8]); // reserved
+            buf.put_slice(&info_sha1);
+            buf.put_slice(PEER_ID.as_bytes());
+
+            let mut stream = tokio::net::TcpStream::connect(peer_address).await?;
+            stream.write_all(&buf.split()).await?;
+
+            buf.resize(68, 0);
+            let proto_str_len = stream.read_u8().await? as usize;
+            stream.read_exact(&mut buf[..proto_str_len]).await?;
+            let proto_name_str = String::from_utf8(buf[..proto_str_len].to_vec()).unwrap();
+            if proto_name_str != "BitTorrent protocol" {
+                return Err("Invalid protocol name".into());
+            }
+            stream.read_exact(&mut buf[..8]).await?; // reserved
+            stream.read_exact(&mut buf[..20]).await?;
+            let info_sha1 = hex::encode(&buf[..20]);
+            println!("Info Hash: {}", info_sha1);
+
+            stream.read_exact(&mut buf[..20]).await?;
+            let peer_id = hex::encode(&buf[..20]);
+            println!("Peer ID: {}", peer_id);
         }
         _ => {
             println!("unknown command: {}", command);
