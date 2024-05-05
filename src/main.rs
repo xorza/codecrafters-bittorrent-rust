@@ -208,10 +208,10 @@ fn value_to_json(value: &Value) -> serde_json::Value {
 }
 
 fn read_torrent_info(torrent_file: &str) -> Result<Value, Box<dyn Error>> {
-    //read file to [u8]
-    let file = std::fs::read(torrent_file)?;
+    let bytes = std::fs::read(torrent_file)?;
+    let value = decode_bencoded_value(&bytes)?;
 
-    Err("Not implemented".into())
+    Ok(value)
 }
 
 // Usage: your_bittorrent.sh decode "<encoded_value>"
@@ -245,17 +245,21 @@ fn main() -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
 
+    #[test]
     fn test_decode_torrent_file() {
-        let torrent_file = "sample.torrent";
+        let torrent_file = "sample2.torrent";
         let decoded_value = read_torrent_info(torrent_file).unwrap();
         let json_decoded_value = value_to_json(&decoded_value);
+
+
         assert_eq!(json_decoded_value, serde_json::json!({
             "announce": "http://bittorrent-test-tracker.codecrafters.io/announce",
+            "created by": "mktorrent 1.1",
             "info": {
                 "length": 92063,
-                "name": "test.txt",
-                "piece length": 16384,
-                "pieces": "..."
+                "name": "sample.txt",
+                "piece length": 32768,
+                "pieces": "p"
             }
         }));
     }
