@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
-use crate::utils::get_bytes_sha1;
 
+use crate::utils::get_bytes_sha1;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TorrentInfo {
@@ -9,8 +9,8 @@ pub struct TorrentInfo {
     #[serde(rename = "piece length")]
     pub piece_length: u32,
     #[serde(
-    deserialize_with = "list_of_arrays::deserialize_20",
-    serialize_with = "list_of_arrays::serialize_20"
+        deserialize_with = "list_of_arrays::deserialize_20",
+        serialize_with = "list_of_arrays::serialize_20"
     )]
     pub pieces: Vec<[u8; 20]>,
 }
@@ -40,9 +40,9 @@ impl TorrentInfo {
     }
 }
 
-
 mod list_of_arrays {
     use std::fmt;
+
     use serde::de::Visitor;
     use serde::Deserializer;
 
@@ -56,10 +56,11 @@ mod list_of_arrays {
         }
 
         fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
-            where
-                E: serde::de::Error,
+        where
+            E: serde::de::Error,
         {
-            let result: Self::Value = v.chunks(N)
+            let result: Self::Value = v
+                .chunks(N)
                 .map(|chunk| {
                     let mut array = [0; N];
                     array.copy_from_slice(chunk);
@@ -72,15 +73,15 @@ mod list_of_arrays {
     }
 
     pub(crate) fn deserialize_20<'de, D>(deserializer: D) -> Result<Vec<[u8; 20]>, D::Error>
-        where
-            D: Deserializer<'de>,
+    where
+        D: Deserializer<'de>,
     {
         deserializer.deserialize_bytes(ListOfArraysVisitor::<20>)
     }
 
     pub(crate) fn serialize_20<S>(value: &Vec<[u8; 20]>, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer,
+    where
+        S: serde::Serializer,
     {
         let mut bytes: Vec<u8> = Vec::new();
         for arr in value {

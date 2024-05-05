@@ -1,19 +1,19 @@
 #![allow(dead_code)]
 
-
-mod torrent_data;
-mod utils;
-mod tracker;
-
-
-use serde_json;
 use std::env;
 use std::error::Error;
+
 use bytes::{BufMut, BytesMut};
+use serde_json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
 use crate::torrent_data::TorrentFile;
 use crate::tracker::TrackerResponse;
 use crate::utils::get_bytes_sha1;
+
+mod torrent_data;
+mod tracker;
+mod utils;
 
 const PEER_ID: &str = "01234567890123456789";
 
@@ -51,7 +51,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let torrent_file = TorrentFile::from_file(torrent_filename)?;
 
             let info_sha1 = torrent_file.info.get_sha1();
-            let info_sha1_url = info_sha1.iter().map(|b| format!("%{:02x}", b)).collect::<String>();
+            let info_sha1_url = info_sha1
+                .iter()
+                .map(|b| format!("%{:02x}", b))
+                .collect::<String>();
 
             let request_url = format!(
                 "{}?info_hash={}&{}",
@@ -67,9 +70,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 ])?
             );
             let client = reqwest::Client::new();
-            let response = client.get(request_url)
-                .send()
-                .await?;
+            let response = client.get(request_url).send().await?;
 
             if !response.status().is_success() {
                 return Err("Failed to get peers".into());
@@ -125,7 +126,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,18 +147,24 @@ mod tests {
 
         let json_decoded_value = serde_json::to_value(&torrent_file).unwrap();
 
-        assert_eq!(json_decoded_value, serde_json::json!({
-            "announce": "http://bittorrent-test-tracker.codecrafters.io/announce",
-            "created by": "mktorrent 1.1",
-            "info": {
-                "length": 92063,
-                "name": "sample.txt",
-                "piece length": 32768,
-                "pieces": []
-            }
-        }));
+        assert_eq!(
+            json_decoded_value,
+            serde_json::json!({
+                "announce": "http://bittorrent-test-tracker.codecrafters.io/announce",
+                "created by": "mktorrent 1.1",
+                "info": {
+                    "length": 92063,
+                    "name": "sample.txt",
+                    "piece length": 32768,
+                    "pieces": []
+                }
+            })
+        );
 
-        assert_eq!(torrent_file.announce, "http://bittorrent-test-tracker.codecrafters.io/announce");
+        assert_eq!(
+            torrent_file.announce,
+            "http://bittorrent-test-tracker.codecrafters.io/announce"
+        );
         assert_eq!(torrent_file.info.length, 92063);
     }
 
@@ -185,7 +191,7 @@ mod tests {
     //     let json_decoded_value = serde_json::to_value(&decoded_value).unwrap();
     //     assert_eq!(json_decoded_value, serde_json::json!(["hello", 52]));
     // }
-    // 
+    //
     // #[test]
     // fn test_decode_bencoded_list_in_dict() {
     //     let encoded_value = "d4:spaml1:a1:bee";
