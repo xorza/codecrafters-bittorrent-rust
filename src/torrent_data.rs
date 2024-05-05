@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
-
-use crate::utils::get_bytes_sha1;
+use sha1::{Digest, Sha1};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TorrentInfo {
@@ -36,7 +35,9 @@ impl TorrentInfo {
     pub fn get_sha1(&self) -> [u8; 20] {
         let bytes = serde_bencode::to_bytes(self).unwrap();
 
-        get_bytes_sha1(&bytes)
+        let mut hasher = Sha1::new();
+        hasher.update(bytes);
+        hasher.finalize().into()
     }
 }
 

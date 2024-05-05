@@ -9,7 +9,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::torrent_data::TorrentFile;
 use crate::tracker::TrackerResponse;
-use crate::utils::get_bytes_sha1;
 
 mod torrent_data;
 mod tracker;
@@ -31,13 +30,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "info" => {
             let torrent_filename = &args[2].as_str();
             let torrent_file = TorrentFile::from_file(torrent_filename)?;
+            let info_sha1 = torrent_file.info.get_sha1();
 
             println!("Tracker URL: {}", torrent_file.announce);
             println!("Length: {}", torrent_file.info.length);
-
-            let info_bencode = serde_bencode::to_bytes(&torrent_file.info)?;
-            let info_sha1 = get_bytes_sha1(&info_bencode);
-
             println!("Info Hash: {}", hex::encode(info_sha1));
             println!("Piece Length: {}", torrent_file.info.piece_length);
 
