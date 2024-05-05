@@ -8,17 +8,17 @@ use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
-enum Value {
+enum BencodeValue {
     Data(Vec<u8>),
     Integer(i64),
-    List(Vec<Value>),
-    Dict(Vec<(String, Value)>),
+    List(Vec<BencodeValue>),
+    Dict(Vec<(String, BencodeValue)>),
 }
 
-impl Value {
-    fn get_by_name(&self, name: &str) -> Option<&Value> {
+impl BencodeValue {
+    fn get_by_name(&self, name: &str) -> Option<&BencodeValue> {
         match self {
-            Value::Dict(dict) => {
+            BencodeValue::Dict(dict) => {
                 dict.iter()
                     .find(|(key, _)| key == name)
                     .map(|(_, value)| value)
@@ -26,49 +26,49 @@ impl Value {
             _ => None,
         }
     }
-    fn get_by_index(&self, index: usize) -> Option<&Value> {
+    fn get_by_index(&self, index: usize) -> Option<&BencodeValue> {
         match self {
-            Value::List(list) => list.get(index),
+            BencodeValue::List(list) => list.get(index),
             _ => None,
         }
     }
     fn get_string(&self) -> Option<String> {
         match self {
-            Value::Data(s) => Some(String::from_utf8_lossy(s).to_string()),
+            BencodeValue::Data(s) => Some(String::from_utf8_lossy(s).to_string()),
             _ => None,
         }
     }
     fn get_i64(&self) -> Option<i64> {
         match self {
-            Value::Integer(i) => Some(*i),
+            BencodeValue::Integer(i) => Some(*i),
             _ => None,
         }
     }
     fn get_bytes(&self) -> Option<&[u8]> {
         match self {
-            Value::Data(s) => Some(s),
+            BencodeValue::Data(s) => Some(s),
             _ => None,
         }
     }
 
-    fn from_bencode_bytes(mut value_to_decode: &[u8]) -> Result<Value, Box<dyn Error>> {
+    fn from_bytes(mut value_to_decode: &[u8]) -> Result<BencodeValue, Box<dyn Error>> {
         let (root_value, left_to_decode) = read_value(&mut value_to_decode)?;
         value_to_decode = left_to_decode;
 
-        let mut stack: Vec<(Option<String>, Value)> = Vec::new();
+        let mut stack: Vec<(Option<String>, BencodeValue)> = Vec::new();
 
         match root_value {
             ReadToken::Data(s) => {
-                return Ok(Value::Data(s));
+                return Ok(BencodeValue::Data(s));
             }
             ReadToken::Integer(i) => {
-                return Ok(Value::Integer(i));
+                return Ok(BencodeValue::Integer(i));
             }
             ReadToken::List => {
-                stack.push((None, Value::List(Vec::new())));
+                stack.push((None, BencodeValue::List(Vec::new())));
             }
             ReadToken::Dictionary => {
-                stack.push((None, Value::Dict(Vec::new())));
+                stack.push((None, BencodeValue::Dict(Vec::new())));
             }
             _ => return Err("Invalid value".into()),
         }
@@ -86,10 +86,10 @@ impl Value {
                     let (key, value) = stack.pop()
                         .ok_or("Invalid value")?;
                     match stack.last_mut() {
-                        Some((None, Value::List(list))) => {
+                        Some((None, BencodeValue::List(list))) => {
                             list.push(value);
                         }
-                        Some((_, Value::Dict(dict))) => {
+                        Some((_, BencodeValue::Dict(dict))) => {
                             dict.push((
                                 key.expect("Invalid key"),
                                 value
@@ -105,8 +105,8 @@ impl Value {
 
             let (_, prev_value) = stack.last_mut().expect("Invalid state");
             let (key, value_token) = match prev_value {
-                Value::List(_) => (None, token),
-                Value::Dict(_) => {
+                BencodeValue::List(_) => (None, token),
+                BencodeValue::Dict(_) => {
                     let (value_token, left_to_decode) = read_value(value_to_decode)?;
                     value_to_decode = left_to_decode;
 
@@ -121,20 +121,20 @@ impl Value {
                 _ => panic!("Invalid state"),
             };
 
-            let value = Value::try_from(value_token)?;
+            let value = BencodeValue::try_from(value_token)?;
 
             match value {
-                Value::List(_) |
-                Value::Dict(_) => {
+                BencodeValue::List(_) |
+                BencodeValue::Dict(_) => {
                     stack.push((key, value));
                 }
-                Value::Data(_) |
-                Value::Integer(_) => {
+                BencodeValue::Data(_) |
+                BencodeValue::Integer(_) => {
                     match prev_value {
-                        Value::List(list) => {
+                        BencodeValue::List(list) => {
                             list.push(value);
                         }
-                        Value::Dict(dict) => {
+                        BencodeValue::Dict(dict) => {
                             dict.push((key.expect("Invalid state, key expected"), value));
                         }
                         _ => panic!("Invalid state")
@@ -143,30 +143,30 @@ impl Value {
             }
         }
     }
-    fn to_becode_bytes(&self) -> Vec<u8> {
+    fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
 
         let (root, len) = match self {
-            Value::Data(s) => {
+            BencodeValue::Data(s) => {
                 bytes.extend(format!("{}:", s.len()).bytes());
                 bytes.extend(s);
                 return bytes;
             }
-            Value::Integer(i) => {
+            BencodeValue::Integer(i) => {
                 bytes.extend(format!("i{}e", i).bytes());
                 return bytes;
             }
-            Value::List(list) => {
+            BencodeValue::List(list) => {
                 bytes.push(b'l');
                 (self, list.len())
             }
-            Value::Dict(dict) => {
+            BencodeValue::Dict(dict) => {
                 bytes.push(b'd');
                 (self, dict.len())
             }
         };
 
-        let mut stack: Vec<(usize, usize, &Value)> = Vec::new();
+        let mut stack: Vec<(usize, usize, &BencodeValue)> = Vec::new();
         stack.push((0, len, root));
 
         while let Some((index, len, value)) = stack.last_mut() {
@@ -177,8 +177,8 @@ impl Value {
             }
 
             let (key, value) = match value {
-                Value::List(list) => (None, &list[*index]),
-                Value::Dict(dict) => (Some(&dict[*index].0), &dict[*index].1),
+                BencodeValue::List(list) => (None, &list[*index]),
+                BencodeValue::Dict(dict) => (Some(&dict[*index].0), &dict[*index].1),
                 _ => panic!("Invalid state")
             };
             *index += 1;
@@ -188,18 +188,18 @@ impl Value {
                 bytes.extend(key.bytes());
             }
             match value {
-                Value::Data(s) => {
+                BencodeValue::Data(s) => {
                     bytes.extend(format!("{}:", s.len()).bytes());
                     bytes.extend(s);
                 }
-                Value::Integer(i) => {
+                BencodeValue::Integer(i) => {
                     bytes.extend(format!("i{}e", i).bytes());
                 }
-                Value::List(list) => {
+                BencodeValue::List(list) => {
                     bytes.push(b'l');
                     stack.push((0, list.len(), value));
                 }
-                Value::Dict(dict) => {
+                BencodeValue::Dict(dict) => {
                     bytes.push(b'd');
                     stack.push((0, dict.len(), value));
                 }
@@ -210,7 +210,7 @@ impl Value {
     }
 
     fn get_sha1(&self) -> Vec<u8> {
-        let info_bytes = self.to_becode_bytes();
+        let info_bytes = self.to_bytes();
 
         let mut hasher = Sha1::new();
         hasher.update(info_bytes);
@@ -220,18 +220,18 @@ impl Value {
     }
 }
 
-impl Display for Value {
+impl Display for BencodeValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let str = match self {
-            Value::Data(_) => self.get_string().unwrap(),
-            Value::Integer(i) => i.to_string(),
-            Value::List(list) => {
+            BencodeValue::Data(_) => self.get_string().unwrap(),
+            BencodeValue::Integer(i) => i.to_string(),
+            BencodeValue::List(list) => {
                 let list: Vec<String> = list.iter()
                     .map(|v| v.to_string())
                     .collect();
                 format!("[{}]", list.join(", "))
             }
-            Value::Dict(dict) => {
+            BencodeValue::Dict(dict) => {
                 let dict: Vec<String> = dict.iter()
                     .map(|(k, v)| format!("{}: {}", k, v.to_string()))
                     .collect();
@@ -250,15 +250,15 @@ enum ReadToken {
     End,
 }
 
-impl TryFrom<ReadToken> for Value {
+impl TryFrom<ReadToken> for BencodeValue {
     type Error = Box<dyn Error>;
 
     fn try_from(token: ReadToken) -> Result<Self, Box<dyn Error>> {
         match token {
-            ReadToken::Data(s) => Ok(Value::Data(s)),
-            ReadToken::Integer(i) => Ok(Value::Integer(i)),
-            ReadToken::List => Ok(Value::List(Vec::new())),
-            ReadToken::Dictionary => Ok(Value::Dict(Vec::new())),
+            ReadToken::Data(s) => Ok(BencodeValue::Data(s)),
+            ReadToken::Integer(i) => Ok(BencodeValue::Integer(i)),
+            ReadToken::List => Ok(BencodeValue::List(Vec::new())),
+            ReadToken::Dictionary => Ok(BencodeValue::Dict(Vec::new())),
             ReadToken::End => Err("Invalid value".into()),
         }
     }
@@ -324,18 +324,18 @@ fn read_value(mut value_to_decode: &[u8]) -> Result<(ReadToken, &[u8]), Box<dyn 
     Ok((new_value, value_to_decode))
 }
 
-fn value_to_json(value: &Value) -> serde_json::Value {
+fn value_to_json(value: &BencodeValue) -> serde_json::Value {
     match value {
-        Value::Data(s) => String::from_utf8_lossy(s).into(),
-        Value::Integer(i) => i.clone().into(),
-        Value::List(list) => {
+        BencodeValue::Data(s) => String::from_utf8_lossy(s).into(),
+        BencodeValue::Integer(i) => i.clone().into(),
+        BencodeValue::List(list) => {
             let list: Vec<serde_json::Value> = list.iter()
                 .map(|v| value_to_json(v))
                 .collect();
 
             list.into()
         }
-        Value::Dict(dict) => {
+        BencodeValue::Dict(dict) => {
             let dict: serde_json::Map<String, serde_json::Value> = dict.iter()
                 .map(|(k, v)| (k.clone(), value_to_json(v)))
                 .collect();
@@ -345,22 +345,23 @@ fn value_to_json(value: &Value) -> serde_json::Value {
     }
 }
 
-fn read_torrent_info(torrent_file: &str) -> Result<Value, Box<dyn Error>> {
+fn read_torrent_info(torrent_file: &str) -> Result<BencodeValue, Box<dyn Error>> {
     let bytes = std::fs::read(torrent_file)?;
-    let value = Value::from_bencode_bytes(&bytes)?;
+    let value = BencodeValue::from_bytes(&bytes)?;
 
     Ok(value)
 }
 
-// Usage: your_bittorrent.sh decode "<encoded_value>"
-fn main() -> Result<(), Box<dyn Error>> {
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().collect();
 
     let command = args[1].as_str();
     match command {
         "decode" => {
             let encoded_value = args[2].as_bytes();
-            let decoded_value = Value::from_bencode_bytes(encoded_value)?;
+            let decoded_value = BencodeValue::from_bytes(encoded_value)?;
             println!("{}", value_to_json(&decoded_value).to_string());
         }
         "info" => {
@@ -401,6 +402,63 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!("{}", hex::encode(piece_hashes[i]));
             }
         }
+        "peers" => {
+            let torrent_file = &args[2].as_str();
+            let decoded_value = read_torrent_info(torrent_file)?;
+
+            let tracker_url = decoded_value
+                .get_by_name("announce").unwrap()
+                .to_string();
+
+            let info = decoded_value
+                .get_by_name("info").unwrap();
+
+            let length = info.get_by_name("length").unwrap()
+                .to_string();
+            let info_sha1 = info.get_sha1();
+            let info_sha1_url = info_sha1.iter().map(|b| format!("%{:02x}", b)).collect::<String>();
+
+            let request_url = format!(
+                "{}?info_hash={}&{}",
+                tracker_url.as_str(),
+                info_sha1_url,
+                serde_urlencoded::to_string(&[
+                    ("peer_id", "01234567890123456789"),
+                    ("port", "6881"),
+                    ("uploaded", "0"),
+                    ("downloaded", "0"),
+                    ("left", length.as_str()),
+                    ("compact", "1"),
+                ])?
+            );
+            let client = reqwest::Client::new();
+            let response = client.get(request_url)
+                .send()
+                .await?;
+
+            if !response.status().is_success() {
+                return Err("Failed to get peers".into());
+            }
+
+            let body = response.bytes().await?;
+            let tracker_response = BencodeValue::from_bytes(&body)?;
+            let interval = tracker_response
+                .get_by_name("interval").unwrap()
+                .get_i64().unwrap();
+            let peers: Vec<(String, u16)> = tracker_response
+                .get_by_name("peers").unwrap()
+                .get_bytes().unwrap()
+                .chunks(6)
+                .map(|chunk| {
+                    let ip = format!("{}.{}.{}.{}", chunk[0], chunk[1], chunk[2], chunk[3]);
+                    let port = ((chunk[4] as u16) << 8) | chunk[5] as u16;
+                    (ip, port)
+                })
+                .collect();
+
+            println!("Interval: {}", interval);
+            println!("Peers: {:?}", peers);
+        }
         _ => {
             println!("unknown command: {}", command);
         }
@@ -430,8 +488,8 @@ mod tests {
     #[test]
     fn test_encode_bencoded_string() {
         let source_value = "d4:spaml1:a1:bee";
-        let decoded_value = Value::from_bencode_bytes(source_value.as_bytes()).unwrap();
-        let encoded_value = decoded_value.to_becode_bytes();
+        let decoded_value = BencodeValue::from_bytes(source_value.as_bytes()).unwrap();
+        let encoded_value = decoded_value.to_bytes();
         let encoded_value_str = String::from_utf8_lossy(&encoded_value);
         assert_eq!(encoded_value_str, source_value);
     }
@@ -467,7 +525,7 @@ mod tests {
     #[test]
     fn test_decode_bencoded_value_string() {
         let encoded_value = "4:spam";
-        let decoded_value = Value::from_bencode_bytes(encoded_value.as_bytes()).unwrap();
+        let decoded_value = BencodeValue::from_bytes(encoded_value.as_bytes()).unwrap();
         let json_decoded_value = value_to_json(&decoded_value);
         assert_eq!(json_decoded_value, serde_json::json!("spam"));
     }
@@ -475,7 +533,7 @@ mod tests {
     #[test]
     fn test_decode_bencoded_value_integer() {
         let encoded_value = "i52e";
-        let decoded_value = Value::from_bencode_bytes(encoded_value.as_bytes()).unwrap();
+        let decoded_value = BencodeValue::from_bytes(encoded_value.as_bytes()).unwrap();
         let json_decoded_value = value_to_json(&decoded_value);
         assert_eq!(json_decoded_value, serde_json::json!(52));
     }
@@ -483,7 +541,7 @@ mod tests {
     #[test]
     fn test_decode_bencoded_list() {
         let encoded_value = "l5:helloi52ee";
-        let decoded_value = Value::from_bencode_bytes(encoded_value.as_bytes()).unwrap();
+        let decoded_value = BencodeValue::from_bytes(encoded_value.as_bytes()).unwrap();
         let json_decoded_value = value_to_json(&decoded_value);
         assert_eq!(json_decoded_value, serde_json::json!(["hello", 52]));
     }
@@ -491,7 +549,7 @@ mod tests {
     #[test]
     fn test_decode_bencoded_list_in_dict() {
         let encoded_value = "d4:spaml1:a1:bee";
-        let decoded_value = Value::from_bencode_bytes(encoded_value.as_bytes()).unwrap();
+        let decoded_value = BencodeValue::from_bytes(encoded_value.as_bytes()).unwrap();
         let json_decoded_value = value_to_json(&decoded_value);
         assert_eq!(json_decoded_value, serde_json::json!({
             "spam": ["a", "b"]
