@@ -44,6 +44,12 @@ impl Value {
             _ => None,
         }
     }
+    fn get_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Value::Data(s) => Some(s),
+            _ => None,
+        }
+    }
 
     fn from_bencode_bytes(mut value_to_decode: &[u8]) -> Result<Value, Box<dyn Error>> {
         let (root_value, left_to_decode) = read_value(&mut value_to_decode)?;
@@ -361,8 +367,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             let torrent_file = &args[2].as_str();
             let decoded_value = read_torrent_info(torrent_file)?;
 
-            // Tracker URL: http://bittorrent-test-tracker.codecrafters.io/announce
-            // Length: 92063
             let tracker_url = decoded_value
                 .get_by_name("announce").unwrap()
                 .to_string();
@@ -375,10 +379,27 @@ fn main() -> Result<(), Box<dyn Error>> {
 
             println!("Length: {}", file_length);
 
-            let sha1 = decoded_value
-                .get_by_name("info").unwrap()
+            let info = decoded_value
+                .get_by_name("info").unwrap();
+
+            let sha1 = info
                 .get_sha1();
             println!("Info Hash: {}", hex::encode(sha1));
+
+            let piece_length = info
+                .get_by_name("piece length").unwrap()
+                .get_i64().unwrap();
+            println!("Piece Length: {}", piece_length);
+
+            let piece_hashes = info
+                .get_by_name("pieces").unwrap()
+                .get_bytes().unwrap();
+            let piece_hashes_count = piece_hashes.len() / 20;
+            let piece_hashes: Vec<&[u8]> = piece_hashes.chunks(20).collect();
+            println!("Piece Hashes:");
+            for i in 0..piece_hashes_count {
+                println!("{}", hex::encode(piece_hashes[i]));
+            }
         }
         _ => {
             println!("unknown command: {}", command);
