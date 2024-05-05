@@ -1,6 +1,9 @@
+#![allow(dead_code)]
+
 use serde_json;
 use std::env;
 use std::error::Error;
+use std::fmt::Display;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Serialize, Deserialize)]
@@ -9,6 +12,59 @@ enum Value {
     Integer(i64),
     List(Vec<Value>),
     Dictionary(Vec<(String, Value)>),
+}
+
+impl Value {
+    fn get_by_name(&self, name: &str) -> Option<&Value> {
+        match self {
+            Value::Dictionary(dict) => {
+                dict.iter()
+                    .find(|(key, _)| key == name)
+                    .map(|(_, value)| value)
+            }
+            _ => None,
+        }
+    }
+    fn get_by_index(&self, index: usize) -> Option<&Value> {
+        match self {
+            Value::List(list) => list.get(index),
+            _ => None,
+        }
+    }
+    fn get_string(&self) -> Option<String> {
+        match self {
+            Value::Data(s) => Some(String::from_utf8_lossy(s).to_string()),
+            _ => None,
+        }
+    }
+    fn get_i64(&self) -> Option<i64> {
+        match self {
+            Value::Integer(i) => Some(*i),
+            _ => None,
+        }
+    }
+}
+
+impl Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let str = match self {
+            Value::Data(_) => self.get_string().unwrap(),
+            Value::Integer(i) => i.to_string(),
+            Value::List(list) => {
+                let list: Vec<String> = list.iter()
+                    .map(|v| v.to_string())
+                    .collect();
+                format!("[{}]", list.join(", "))
+            }
+            Value::Dictionary(dict) => {
+                let dict: Vec<String> = dict.iter()
+                    .map(|(k, v)| format!("{}: {}", k, v.to_string()))
+                    .collect();
+                format!("{{{}}}", dict.join(", "))
+            }
+        };
+        write!(f, "{}", str)
+    }
 }
 
 enum ReadToken {
@@ -227,10 +283,21 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         "info" => {
             let torrent_file = &args[2].as_str();
-            let values = read_torrent_info(torrent_file)?;
-            println!("{}", value_to_json(&values).to_string());
+            let decoded_value = read_torrent_info(torrent_file)?;
+
             // Tracker URL: http://bittorrent-test-tracker.codecrafters.io/announce
             // Length: 92063
+            let tracker_url = decoded_value
+                .get_by_name("announce").unwrap()
+                .to_string();
+            println!("Tracker URL: {}", tracker_url);
+            
+            let file_length = decoded_value
+                .get_by_name("info").unwrap()
+                .get_by_name("length").unwrap()
+                .get_i64().unwrap();
+            
+            println!("Length: {}", file_length);
         }
         _ => {
             println!("unknown command: {}", command);
@@ -249,8 +316,8 @@ mod tests {
     fn test_decode_torrent_file() {
         let torrent_file = "sample2.torrent";
         let decoded_value = read_torrent_info(torrent_file).unwrap();
-        let json_decoded_value = value_to_json(&decoded_value);
 
+        let json_decoded_value = value_to_json(&decoded_value);
 
         assert_eq!(json_decoded_value, serde_json::json!({
             "announce": "http://bittorrent-test-tracker.codecrafters.io/announce",
@@ -262,6 +329,15 @@ mod tests {
                 "pieces": "p"
             }
         }));
+
+        let tracker_url = decoded_value.get_by_name("announce").unwrap().to_string();
+        assert_eq!(tracker_url, "http://bittorrent-test-tracker.codecrafters.io/announce");
+
+        let file_length = decoded_value
+            .get_by_name("info").unwrap()
+            .get_by_name("length").unwrap()
+            .get_i64().unwrap();
+        assert_eq!(file_length, 92063);
     }
 
     #[test]
