@@ -457,7 +457,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .collect();
 
             println!("Interval: {}", interval);
-            println!("Peers: {:?}", peers);
+            println!("Peers:");
+            for (ip, port) in peers {
+                println!("  {}:{}", ip, port);
+            }
         }
         _ => {
             println!("unknown command: {}", command);
