@@ -378,7 +378,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let sha1 = decoded_value
                 .get_by_name("info").unwrap()
                 .get_sha1();
-            println!("Info Hash: {:?}", hex::encode(sha1));
+            println!("Info Hash: {}", hex::encode(sha1));
         }
         _ => {
             println!("unknown command: {}", command);
@@ -402,7 +402,7 @@ mod tests {
 
         let sha1 = info.get_sha1();
         let sha1_str = hex::encode(sha1);
-        
+
         assert_eq!(sha1_str, "d69f91e6b2ae4c542468d1073a71d4ea13879a7f");
     }
 
