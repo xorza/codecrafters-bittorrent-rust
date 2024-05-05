@@ -5,6 +5,7 @@ mod torrent_data;
 mod utils;
 mod tracker;
 
+
 use serde_json;
 use std::env;
 use std::error::Error;
@@ -77,19 +78,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let bytes = response.bytes().await?;
             let tracker_response: TrackerResponse = serde_bencode::from_bytes(&bytes)?;
 
-            let peers: Vec<(String, u16)> = tracker_response
-                .peers
-                .iter()
-                .map(|chunk| {
-                    let ip = format!("{}.{}.{}.{}", chunk[0], chunk[1], chunk[2], chunk[3]);
-                    let port = ((chunk[4] as u16) << 8) | chunk[5] as u16;
-                    (ip, port)
-                })
-                .collect();
-
             println!("Interval: {}", tracker_response.interval);
             println!("Peers:");
-            for (ip, port) in peers {
+            for (ip, port) in tracker_response.peers {
                 println!("  {}:{}", ip, port);
             }
         }

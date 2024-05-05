@@ -1,6 +1,6 @@
-
 use serde::{Deserialize, Serialize};
 use crate::utils::get_bytes_sha1;
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TorrentInfo {
@@ -8,7 +8,10 @@ pub struct TorrentInfo {
     pub name: String,
     #[serde(rename = "piece length")]
     pub piece_length: u32,
-    #[serde(deserialize_with = "hash_array::deserialize_hash_array", serialize_with = "hash_array::serialize_hash_array")]
+    #[serde(
+    deserialize_with = "list_of_arrays::deserialize_20",
+    serialize_with = "list_of_arrays::serialize_20"
+    )]
     pub pieces: Vec<[u8; 20]>,
 }
 
@@ -38,15 +41,15 @@ impl TorrentInfo {
 }
 
 
-mod hash_array {
+mod list_of_arrays {
     use std::fmt;
     use serde::de::Visitor;
     use serde::Deserializer;
 
-    struct HashArrayVisitor;
+    struct ListOfArraysVisitor<const N: usize>;
 
-    impl<'de> Visitor<'de> for HashArrayVisitor {
-        type Value = Vec<[u8; 20]>;
+    impl<'de, const N: usize> Visitor<'de> for ListOfArraysVisitor<N> {
+        type Value = Vec<[u8; N]>;
 
         fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
             formatter.write_str("sdfgsdfg")
@@ -56,9 +59,9 @@ mod hash_array {
             where
                 E: serde::de::Error,
         {
-            let result: Self::Value = v.chunks(20)
+            let result: Self::Value = v.chunks(N)
                 .map(|chunk| {
-                    let mut array = [0; 20];
+                    let mut array = [0; N];
                     array.copy_from_slice(chunk);
                     array
                 })
@@ -68,20 +71,20 @@ mod hash_array {
         }
     }
 
-    pub(crate) fn deserialize_hash_array<'de, D>(deserializer: D) -> Result<Vec<[u8; 20]>, D::Error>
+    pub(crate) fn deserialize_20<'de, D>(deserializer: D) -> Result<Vec<[u8; 20]>, D::Error>
         where
             D: Deserializer<'de>,
     {
-        deserializer.deserialize_bytes(HashArrayVisitor)
+        deserializer.deserialize_bytes(ListOfArraysVisitor::<20>)
     }
 
-    pub(crate) fn serialize_hash_array<S>(value: &Vec<[u8; 20]>, serializer: S) -> Result<S::Ok, S::Error>
+    pub(crate) fn serialize_20<S>(value: &Vec<[u8; 20]>, serializer: S) -> Result<S::Ok, S::Error>
         where
             S: serde::Serializer,
     {
         let mut bytes: Vec<u8> = Vec::new();
-        for hash in value {
-            bytes.extend_from_slice(hash);
+        for arr in value {
+            bytes.extend_from_slice(arr);
         }
 
         serializer.serialize_bytes(&bytes)
