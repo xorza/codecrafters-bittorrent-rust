@@ -163,8 +163,8 @@ impl SharedDownloadState {
                 let output_file = {
                     if state.output_file.is_none() {
                         let output_file = File::options()
-                            .write(true)
                             .create(true)
+                            .write(true)
                             .truncate(true)
                             .open(&state.output_filename)
                             .await?;
