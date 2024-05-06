@@ -12,7 +12,7 @@ pub struct BlockInfo {
     pub piece_index: usize,
     pub index: usize,
     pub offset: usize,
-    pub length: usize,
+    pub size: usize,
 }
 
 #[derive(Debug)]
@@ -40,14 +40,7 @@ pub struct SharedDownloadState(Arc<Mutex<DownloadState>>);
 
 impl SharedDownloadState {
     pub fn new(torrent_file: TorrentFile, output_filename: String, block_size: usize) -> Self {
-        let block_count = {
-            let count = torrent_file.info.piece_size / block_size;
-            if torrent_file.info.piece_size % block_size != 0 {
-                count + 1
-            } else {
-                count
-            }
-        };
+        debug_assert_ne!(block_size, 0);
 
         let pieces = torrent_file
             .info
@@ -55,16 +48,28 @@ impl SharedDownloadState {
             .iter()
             .enumerate()
             .map(|(index, hash)| {
-                let size = if index == torrent_file.info.pieces.len() - 1 {
+                let piece_size = if index == torrent_file.info.pieces.len() - 1 {
                     torrent_file.info.length % torrent_file.info.piece_size
                 } else {
                     torrent_file.info.piece_size
                 };
+                let block_count = {
+                    let count = piece_size / block_size;
+                    if piece_size % block_size != 0 {
+                        count + 1
+                    } else {
+                        count
+                    }
+                };
+
+                debug_assert_ne!(block_count, 0);
+                debug_assert_ne!(piece_size, 0);
+
                 PieceState {
                     hash: hash.clone(),
                     done: false,
                     blocks: vec![false; block_count],
-                    size,
+                    size: piece_size,
                     data: Vec::new(),
                 }
             })
@@ -95,17 +100,21 @@ impl SharedDownloadState {
 
         let block_index = block_index.unwrap();
         let offset = block_index * this.block_size;
-        let length = if offset + this.block_size > piece.size {
+        let size = if offset + this.block_size > piece.size {
             this.piece_size % this.block_size
         } else {
             this.block_size
         };
 
+        debug_assert_ne!(size, 0);
+        debug_assert!(offset <= piece.size);
+        debug_assert!(offset + size <= piece.size);
+
         Some(BlockInfo {
             piece_index,
             index: block_index,
             offset,
-            length,
+            size,
         })
     }
 

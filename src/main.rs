@@ -176,13 +176,13 @@ async fn download_piece(
 
         println!(
             "Requesting block: {} offset: {} length: {}",
-            block.piece_index, block.offset, block.length
+            block.piece_index, block.offset, block.size
         );
 
         buf.clear();
         buf.put_u32(block.piece_index as u32);
         buf.put_u32(block.offset as u32);
-        buf.put_u32(block.length as u32);
+        buf.put_u32(block.size as u32);
 
         let request_msg = Message::new(6);
         peer.send(&request_msg, &buf).await?;
