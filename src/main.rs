@@ -3,14 +3,16 @@
 use std::env;
 use std::error::Error;
 
-use bytes::{BufMut, BytesMut};
+use bytes::BytesMut;
 use serde_json;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
+use crate::peer::HandShake;
 use crate::torrent_data::TorrentFile;
 use crate::tracker::{send_request, TrackerRequest};
 
 mod bencode_serialization;
+mod peer;
 mod torrent_data;
 mod tracker;
 mod utils;
@@ -69,33 +71,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let peer_address = args[3].as_str();
 
             let torrent_file = TorrentFile::from_file(torrent_filename)?;
-            let info_sha1 = torrent_file.info.get_sha1();
-
-            let mut buf = BytesMut::with_capacity(68);
-            buf.put_u8(19);
-            buf.put_slice(b"BitTorrent protocol");
-            buf.put_slice(&[0u8; 8]); // reserved
-            buf.put_slice(info_sha1.as_slice());
-            buf.put_slice(PEER_ID.as_bytes());
-
+            let mut buf = BytesMut::with_capacity(256);
+            let request = HandShake::new(torrent_file.info.get_sha1(), PEER_ID.as_bytes().into());
             let mut stream = tokio::net::TcpStream::connect(peer_address).await?;
+
+            request.write(&mut buf);
             stream.write_all(&buf.split()).await?;
 
-            buf.resize(68, 0);
-            let proto_str_len = stream.read_u8().await? as usize;
-            stream.read_exact(&mut buf[..proto_str_len]).await?;
-            let proto_name_str = String::from_utf8(buf[..proto_str_len].to_vec()).unwrap();
-            if proto_name_str != "BitTorrent protocol" {
-                return Err("Invalid protocol name".into());
-            }
-            stream.read_exact(&mut buf[..8]).await?; // reserved
-            stream.read_exact(&mut buf[..20]).await?;
-            let info_sha1 = hex::encode(&buf[..20]);
-            println!("Info Hash: {}", info_sha1);
-
-            stream.read_exact(&mut buf[..20]).await?;
-            let peer_id = hex::encode(&buf[..20]);
-            println!("Peer ID: {}", peer_id);
+            let response = HandShake::read_async(&mut stream, &mut buf).await?;
+            println!("Peer ID: {}", response.peer_id);
         }
         _ => {
             println!("unknown command: {}", command);

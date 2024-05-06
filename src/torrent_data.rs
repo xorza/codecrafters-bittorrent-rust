@@ -53,6 +53,14 @@ impl From<[u8; 20]> for Sha1Hash {
     }
 }
 
+impl From<&[u8]> for Sha1Hash {
+    fn from(value: &[u8]) -> Self {
+        let mut array = [0; 20];
+        array.copy_from_slice(value);
+        Sha1Hash(array)
+    }
+}
+
 impl From<Output<Sha1>> for Sha1Hash {
     fn from(value: Output<Sha1>) -> Self {
         let mut array = [0; 20];
@@ -73,6 +81,9 @@ impl Sha1Hash {
     }
     pub fn as_slice(&self) -> &[u8] {
         &self.0
+    }
+    pub fn as_mut(&mut self) -> &mut [u8] {
+        &mut self.0
     }
 }
 
