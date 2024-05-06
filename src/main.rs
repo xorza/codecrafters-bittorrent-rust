@@ -4,9 +4,8 @@ use std::error::Error;
 
 use clap::{Arg, ArgMatches, Command};
 use serde_json;
-use tokio::io::{AsyncWriteExt, BufStream};
 
-use crate::peer::HandShake;
+use crate::peer::{HandShake, Peer};
 use crate::torrent_data::TorrentFile;
 use crate::tracker::{send_request, TrackerRequest};
 
@@ -66,8 +65,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             println!("Interval: {}", tracker_response.interval);
             println!("Peers:");
-            for (ip, port) in tracker_response.peers {
-                println!("  {}:{}", ip, port);
+            for addr in tracker_response.peers {
+                println!("  {}", addr);
             }
         }
         Some(("handshake", handshake_matches)) => {
@@ -78,17 +77,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .get_one::<String>("peer_address")
                 .expect("peer_address is required");
 
+            let peer_address = peer_address.parse::<std::net::SocketAddr>()?;
             let torrent_file = TorrentFile::from_file(torrent_filename)?;
+            let handshake = HandShake::new(torrent_file.info.get_sha1(), PEER_ID.as_bytes().into());
 
-            let request = HandShake::new(torrent_file.info.get_sha1(), PEER_ID.as_bytes().into());
-            let mut stream = tokio::net::TcpStream::connect(peer_address).await?;
-            let mut bufstream = BufStream::new(&mut stream);
-
-            request.to_stream(&mut bufstream).await?;
-            bufstream.flush().await?;
-
-            let response = HandShake::from_stream(&mut stream).await?;
-            println!("Peer ID: {}", response.peer_id);
+            let peer = Peer::connect(&peer_address, &handshake).await?;
+            println!("Peer ID: {}", peer.peer_id);
         }
         Some(("download_piece", download_piece_matches)) => {
             let output = download_piece_matches
@@ -97,11 +91,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let torrent_filename = download_piece_matches
                 .get_one::<String>("torrent_file")
                 .expect("torrent_file is required");
-            let piece_index = download_piece_matches
-                .get_one::<usize>("piece_index")
-                .expect("piece_index is required");
+            let piece_index: u32 = download_piece_matches
+                .get_one::<String>("piece_index")
+                .expect("piece_index is required")
+                .parse()?;
 
             let torrent_file = TorrentFile::from_file(torrent_filename)?;
+            let tracker_request = TrackerRequest {
+                info_hash: torrent_file.info.get_sha1(),
+                peer_id: PEER_ID.to_string(),
+                port: 6881,
+                uploaded: 0,
+                downloaded: 0,
+                left: torrent_file.info.length as u64,
+            };
+            let tracker_response =
+                send_request(tracker_request, torrent_file.announce.as_str()).await?;
+            let peer_addr = tracker_response.peers[0];
+            let handshake = HandShake::new(torrent_file.info.get_sha1(), PEER_ID.as_bytes().into());
+            let mut peer = Peer::connect(&peer_addr, &handshake).await?;
+            let message = peer.receive().await?;
         }
         _ => {
             println!("No subcommand was used, use --help to see available subcommands");

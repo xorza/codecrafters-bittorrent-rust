@@ -1,4 +1,4 @@
-use std::net::Ipv4Addr;
+use std::net::SocketAddr;
 
 use serde::{Deserialize, Serialize};
 
@@ -8,10 +8,10 @@ use crate::torrent_data::Sha1Hash;
 pub struct TrackerResponse {
     pub interval: u32,
     #[serde(
-        deserialize_with = "list_of_ip_addr::deserialize",
-        serialize_with = "list_of_ip_addr::serialize"
+        deserialize_with = "list_of_socket_addr::deserialize",
+        serialize_with = "list_of_socket_addr::serialize"
     )]
-    pub peers: Vec<(Ipv4Addr, u16)>,
+    pub peers: Vec<SocketAddr>,
 }
 
 pub struct TrackerRequest {
@@ -56,9 +56,9 @@ pub async fn send_request(
     Ok(response)
 }
 
-mod list_of_ip_addr {
+mod list_of_socket_addr {
     use std::fmt;
-    use std::net::Ipv4Addr;
+    use std::net::{IpAddr, SocketAddr};
 
     use serde::de::Visitor;
     use serde::Deserializer;
@@ -66,7 +66,7 @@ mod list_of_ip_addr {
     struct ListOfAddrVisitor;
 
     impl<'de> Visitor<'de> for ListOfAddrVisitor {
-        type Value = Vec<(Ipv4Addr, u16)>;
+        type Value = Vec<SocketAddr>;
 
         fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
             formatter.write_str("sdfgsdfg")
@@ -84,7 +84,7 @@ mod list_of_ip_addr {
 
                     let port = u16::from_be_bytes([chunk[4], chunk[5]]);
 
-                    (Ipv4Addr::from(ip_bytes), port)
+                    SocketAddr::new(IpAddr::from(ip_bytes), port)
                 })
                 .collect();
 
@@ -92,25 +92,28 @@ mod list_of_ip_addr {
         }
     }
 
-    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<Vec<(Ipv4Addr, u16)>, D::Error>
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<Vec<SocketAddr>, D::Error>
     where
         D: Deserializer<'de>,
     {
         deserializer.deserialize_bytes(ListOfAddrVisitor)
     }
 
-    pub(crate) fn serialize<S>(
-        value: &Vec<(Ipv4Addr, u16)>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
+    pub(crate) fn serialize<S>(value: &Vec<SocketAddr>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         let mut bytes: Vec<u8> = Vec::new();
-        for arr in value {
-            let ip_bytes = arr.0.octets();
-            bytes.extend_from_slice(&ip_bytes);
-            bytes.extend_from_slice(&arr.1.to_be_bytes());
+        for addr in value {
+            match addr.ip() {
+                IpAddr::V4(ipv4) => {
+                    bytes.extend_from_slice(&ipv4.octets());
+                }
+                IpAddr::V6(_) => {
+                    panic!("IPv6 is not supported");
+                }
+            }
+            bytes.extend_from_slice(&addr.port().to_be_bytes());
         }
 
         serializer.serialize_bytes(&bytes)

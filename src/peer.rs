@@ -1,7 +1,54 @@
+use std::net::SocketAddr;
+
 use anyhow::anyhow;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream};
+use tokio::net::TcpStream;
 
 use crate::torrent_data::Sha1Hash;
+
+pub struct Peer {
+    pub peer_id: Sha1Hash,
+    pub addr: SocketAddr,
+    pub stream: BufStream<TcpStream>,
+}
+
+impl Peer {
+    pub async fn connect(addr: &SocketAddr, handshake: &HandShake) -> anyhow::Result<Self> {
+        let stream = TcpStream::connect(addr).await?;
+        let mut stream = BufStream::new(stream);
+
+        handshake.to_stream(&mut stream).await?;
+        stream.flush().await?;
+        let handshake_reply = HandShake::from_stream(&mut stream).await?;
+
+        Ok(Self {
+            peer_id: handshake_reply.peer_id,
+            addr: addr.clone(),
+            stream,
+        })
+    }
+    pub async fn receive(&mut self) -> anyhow::Result<Message> {
+        let message_length = self.stream.read_u32().await? as usize;
+        let message_id = self.stream.read_u8().await?;
+
+        let mut payload = vec![0; message_length - 1];
+        self.stream.read_exact(&mut payload).await?;
+
+        Ok(Message {
+            id: message_id,
+            payload,
+        })
+    }
+    pub async fn send(&mut self, message: &Message) -> anyhow::Result<()> {
+        self.stream
+            .write_u32(message.payload.len() as u32 + 1)
+            .await?;
+        self.stream.write_u8(message.id).await?;
+        self.stream.write_all(&message.payload).await?;
+
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct HandShake {
@@ -58,4 +105,9 @@ impl HandShake {
 
         Ok(result)
     }
+}
+
+pub struct Message {
+    pub id: u8,
+    pub payload: Vec<u8>,
 }
