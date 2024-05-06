@@ -40,7 +40,7 @@ pub struct SharedDownloadState(Arc<Mutex<DownloadState>>);
 
 impl SharedDownloadState {
     pub fn new(torrent_file: TorrentFile, output_filename: String, block_size: usize) -> Self {
-        debug_assert_ne!(block_size, 0);
+        assert_ne!(block_size, 0);
 
         let pieces = torrent_file
             .info
@@ -62,8 +62,8 @@ impl SharedDownloadState {
                     }
                 };
 
-                debug_assert_ne!(block_count, 0);
-                debug_assert_ne!(piece_size, 0);
+                assert_ne!(block_count, 0);
+                assert_ne!(piece_size, 0);
 
                 PieceState {
                     hash: hash.clone(),
@@ -101,14 +101,14 @@ impl SharedDownloadState {
         let block_index = block_index.unwrap();
         let offset = block_index * this.block_size;
         let size = if offset + this.block_size > piece.size {
-            this.piece_size % this.block_size
+            piece.size % this.block_size
         } else {
             this.block_size
         };
 
-        debug_assert_ne!(size, 0);
-        debug_assert!(offset <= piece.size);
-        debug_assert!(offset + size <= piece.size);
+        assert_ne!(size, 0);
+        assert!(offset <= piece.size);
+        assert!(offset + size <= piece.size);
 
         Some(BlockInfo {
             piece_index,
@@ -127,12 +127,12 @@ impl SharedDownloadState {
     ) -> anyhow::Result<()> {
         let mut state = self.0.lock().await;
 
-        debug_assert_eq!(state.done, false);
-        debug_assert!(offset + data.len() <= state.piece_size);
-        debug_assert!(piece_index < state.pieces.len());
-        debug_assert!(data.len() <= state.block_size);
-        debug_assert!(state.pieces[piece_index].blocks.len() >= block_index);
-        debug_assert_eq!(state.pieces[piece_index].blocks[block_index], false);
+        assert_eq!(state.done, false);
+        assert!(offset + data.len() <= state.piece_size);
+        assert!(piece_index < state.pieces.len());
+        assert!(data.len() <= state.block_size);
+        assert!(state.pieces[piece_index].blocks.len() >= block_index);
+        assert_eq!(state.pieces[piece_index].blocks[block_index], false);
 
         let piece_done = {
             let piece = &mut state.pieces[piece_index];

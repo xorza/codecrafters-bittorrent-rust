@@ -17,9 +17,9 @@ impl Peer {
     pub async fn connect(addr: &SocketAddr, handshake: &HandShake) -> anyhow::Result<Self> {
         let stream = TcpStream::connect(addr).await?;
         let mut stream = BufStream::new(stream);
-
         handshake.to_stream(&mut stream).await?;
         stream.flush().await?;
+
         let handshake_reply = HandShake::from_stream(&mut stream).await?;
 
         Ok(Self {

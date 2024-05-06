@@ -23,7 +23,7 @@ pub struct TorrentInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TorrentFile {
     pub announce: String,
-    #[serde(rename = "created by")]
+    #[serde(rename = "created by", default = "String::new")]
     pub created_by: String,
     pub info: TorrentInfo,
 }

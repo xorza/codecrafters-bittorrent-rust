@@ -118,7 +118,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let download_state =
                 SharedDownloadState::new(torrent_file, output_filename.clone(), BLOCK_SIZE);
 
-            let tasks: Vec<JoinHandle<()>> = tracker_response.peers[0..1]
+            let tasks: Vec<JoinHandle<()>> = tracker_response.peers[1..2]
                 .iter()
                 .map(|peer_addr| {
                     let peer_addr = peer_addr.clone();
@@ -153,6 +153,8 @@ async fn download_piece(
     let mut buf = BytesMut::with_capacity(BLOCK_SIZE + 128);
     let mut peer = Peer::connect(&peer_addr, &handshake).await?;
 
+    println!("Connected to peer: {}", peer.peer_id);
+
     let message = peer.receive(&mut buf).await?;
     if message.id != 5 {
         return Err("Expected bitfield message".into());
@@ -173,11 +175,6 @@ async fn download_piece(
             break;
         }
         let block = block.unwrap();
-
-        println!(
-            "Requesting block: {} offset: {} length: {}",
-            block.piece_index, block.offset, block.size
-        );
 
         buf.clear();
         buf.put_u32(block.piece_index as u32);
@@ -308,41 +305,35 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_bencoded_value_string() {
-        let encoded_value = "4:spam";
-        let decoded_value: String = serde_bencode::from_bytes(encoded_value.as_bytes()).unwrap();
-        let json_decoded_value = serde_json::to_value(&decoded_value).unwrap();
-        assert_eq!(json_decoded_value, serde_json::json!("spam"));
-    }
+    fn test_bencode_to_json() {
+        assert_eq!(bencode_to_json("4:spam"), serde_json::json!("spam"));
 
-    #[test]
-    fn test_decode_bencoded_value_integer() {
-        let encoded_value = "i52e";
-        let decoded_value: i64 = serde_bencode::from_bytes(encoded_value.as_bytes()).unwrap();
-        let json_decoded_value = serde_json::to_value(&decoded_value).unwrap();
-        assert_eq!(json_decoded_value, serde_json::json!(52));
-    }
+        assert_eq!(bencode_to_json("i52e"), serde_json::json!(52));
 
-    #[test]
-    fn test_decode_bencoded_list() {
-        let encoded_value = "l5:helloi52ee";
-        let decoded_value: bencode_serialization::Value =
-            serde_bencode::from_str(encoded_value).unwrap();
-        let json_decoded_value = serde_json::to_value(&decoded_value).unwrap();
-        assert_eq!(json_decoded_value, serde_json::json!(["hello", 52]));
-    }
-
-    #[test]
-    fn test_decode_bencoded_list_in_dict() {
-        let encoded_value = "d4:spaml1:a1:bee";
-        let decoded_value: bencode_serialization::Value =
-            serde_bencode::from_str(encoded_value).unwrap();
-        let json_decoded_value = serde_json::to_value(&decoded_value).unwrap();
         assert_eq!(
-            json_decoded_value,
+            bencode_to_json("l5:helloi52ee"),
+            serde_json::json!(["hello", 52])
+        );
+
+        assert_eq!(
+            bencode_to_json("d4:spaml1:a1:bee"),
             serde_json::json!({
                 "spam": ["a", "b"]
             })
         );
+
+        assert_eq!(
+            bencode_to_json("d3:foo9:blueberry5:helloi52ee"),
+            serde_json::json!({
+                "foo": "blueberry",
+                "hello": 52
+            })
+        );
+    }
+
+    fn bencode_to_json(encoded_value: &str) -> serde_json::Value {
+        let decoded_value: bencode_serialization::Value =
+            serde_bencode::from_str(encoded_value).unwrap();
+        serde_json::to_value(&decoded_value).unwrap()
     }
 }
