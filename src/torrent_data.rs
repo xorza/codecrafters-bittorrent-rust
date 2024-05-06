@@ -65,6 +65,7 @@ impl From<Output<Sha1>> for Sha1Hash {
     fn from(value: Output<Sha1>) -> Self {
         let mut array = [0; 20];
         array.copy_from_slice(&value[..]);
+
         Sha1Hash(array)
     }
 }

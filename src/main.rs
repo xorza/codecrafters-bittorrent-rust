@@ -174,6 +174,11 @@ async fn download_piece(
         }
         let block = block.unwrap();
 
+        println!(
+            "Requesting block: {} offset: {} length: {}",
+            block.piece_index, block.offset, block.length
+        );
+
         buf.clear();
         buf.put_u32(block.piece_index as u32);
         buf.put_u32(block.offset as u32);
@@ -199,8 +204,8 @@ async fn download_piece(
             .block_done(piece_index, block.index, offset, buf.to_vec())
             .await?;
         println!(
-            "Received piece: {} offset: {} bytes: {}",
-            piece_index, offset, size
+            "Received block: {} offset: {} bytes: {} piece: {}",
+            piece_index, offset, size, piece_index,
         );
     }
 
