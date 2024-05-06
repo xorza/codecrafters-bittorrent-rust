@@ -2,6 +2,8 @@ use std::net::Ipv4Addr;
 
 use serde::{Deserialize, Serialize};
 
+use crate::torrent_data::{Sha1Hash, TorrentFile};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrackerResponse {
     pub interval: u32,
@@ -10,6 +12,68 @@ pub struct TrackerResponse {
         serialize_with = "list_of_ip_addr::serialize"
     )]
     pub peers: Vec<(Ipv4Addr, u16)>,
+}
+
+pub struct TrackerRequest {
+    pub info_hash: Sha1Hash,
+    pub peer_id: Sha1Hash,
+    pub port: u16,
+    pub uploaded: u64,
+    pub downloaded: u64,
+    pub left: u64,
+}
+
+impl From<TorrentFile> for TrackerRequest {
+    fn from(value: TorrentFile) -> Self {
+        let info_hash = value.info.get_sha1();
+        let peer_id = Sha1Hash::default();
+        let port = 6881;
+        let uploaded = 0;
+        let downloaded = 0;
+        let left = value.info.length as u64;
+
+        TrackerRequest {
+            info_hash,
+            peer_id,
+            port,
+            uploaded,
+            downloaded,
+            left,
+        }
+    }
+}
+
+pub async fn send_request(
+    request: TrackerRequest,
+    announce: &str,
+) -> Result<TrackerResponse, Box<dyn std::error::Error>> {
+    let info_hash_url = request
+        .info_hash
+        .iter()
+        .map(|b| format!("%{:02x}", b))
+        .collect::<String>();
+
+    let request_url = format!(
+        "{}?info_hash={}&{}",
+        announce,
+        info_hash_url,
+        serde_urlencoded::to_string(&[
+            ("peer_id", request.peer_id.to_string().as_str()),
+            ("port", request.port.to_string().as_str()),
+            ("uploaded", request.uploaded.to_string().as_str()),
+            ("downloaded", request.downloaded.to_string().as_str()),
+            ("left", request.left.to_string().as_str()),
+            ("compact", "1"),
+        ])?
+    );
+
+    let client = reqwest::Client::new();
+    let response = client.get(request_url).send().await?;
+
+    let response_bytes = response.bytes().await?;
+    let response: TrackerResponse = serde_bencode::from_bytes(&response_bytes)?;
+
+    Ok(response)
 }
 
 mod list_of_ip_addr {

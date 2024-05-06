@@ -10,6 +10,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::torrent_data::TorrentFile;
 use crate::tracker::TrackerResponse;
 
+mod bencode_serialization;
 mod torrent_data;
 mod tracker;
 mod utils;
@@ -24,7 +25,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     match command {
         "decode" => {
             let encoded_value = args[2].as_bytes();
-            let decoded_value = serde_bencode::from_bytes(encoded_value)?;
+            let decoded_value: bencode_serialization::Value =
+                serde_bencode::from_bytes(encoded_value)?;
             println!("{}", serde_json::to_string(&decoded_value)?);
         }
         "info" => {
@@ -34,12 +36,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
             println!("Tracker URL: {}", torrent_file.announce);
             println!("Length: {}", torrent_file.info.length);
-            println!("Info Hash: {}", hex::encode(info_sha1));
+            println!("Info Hash: {}", info_sha1);
             println!("Piece Length: {}", torrent_file.info.piece_length);
 
             println!("Piece Hashes:");
             for piece in torrent_file.info.pieces {
-                println!("  {}", hex::encode(piece));
+                println!("  {}", piece);
             }
         }
         "peers" => {
@@ -92,7 +94,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             buf.put_u8(19);
             buf.put_slice(b"BitTorrent protocol");
             buf.put_slice(&[0u8; 8]); // reserved
-            buf.put_slice(&info_sha1);
+            buf.put_slice(info_sha1.as_slice());
             buf.put_slice(PEER_ID.as_bytes());
 
             let mut stream = tokio::net::TcpStream::connect(peer_address).await?;
@@ -130,7 +132,7 @@ mod tests {
     fn test_info_hash() {
         let torrent_filename = "sample.torrent";
         let torrent_file = TorrentFile::from_file(torrent_filename).unwrap();
-        let info_sha1_str = hex::encode(torrent_file.info.get_sha1());
+        let info_sha1_str = torrent_file.info.get_sha1().to_string();
 
         assert_eq!(info_sha1_str, "d69f91e6b2ae4c542468d1073a71d4ea13879a7f");
     }
@@ -180,21 +182,26 @@ mod tests {
         assert_eq!(json_decoded_value, serde_json::json!(52));
     }
 
-    // #[test]
-    // fn test_decode_bencoded_list() {
-    //     let encoded_value = "l5:helloi52ee";
-    //     let decoded_value = serde_bencode::from_bytes(encoded_value.as_bytes()).unwrap();
-    //     let json_decoded_value = serde_json::to_value(&decoded_value).unwrap();
-    //     assert_eq!(json_decoded_value, serde_json::json!(["hello", 52]));
-    // }
-    //
-    // #[test]
-    // fn test_decode_bencoded_list_in_dict() {
-    //     let encoded_value = "d4:spaml1:a1:bee";
-    //     let decoded_value = serde_bencode::from_bytes(encoded_value.as_bytes()).unwrap();
-    //     let json_decoded_value = serde_json::to_value(&decoded_value).unwrap();
-    //     assert_eq!(json_decoded_value, serde_json::json!({
-    //         "spam": ["a", "b"]
-    //     }));
-    // }
+    #[test]
+    fn test_decode_bencoded_list() {
+        let encoded_value = "l5:helloi52ee";
+        let decoded_value: bencode_serialization::Value =
+            serde_bencode::from_str(encoded_value).unwrap();
+        let json_decoded_value = serde_json::to_value(&decoded_value).unwrap();
+        assert_eq!(json_decoded_value, serde_json::json!(["hello", 52]));
+    }
+
+    #[test]
+    fn test_decode_bencoded_list_in_dict() {
+        let encoded_value = "d4:spaml1:a1:bee";
+        let decoded_value: bencode_serialization::Value =
+            serde_bencode::from_str(encoded_value).unwrap();
+        let json_decoded_value = serde_json::to_value(&decoded_value).unwrap();
+        assert_eq!(
+            json_decoded_value,
+            serde_json::json!({
+                "spam": ["a", "b"]
+            })
+        );
+    }
 }

@@ -1,5 +1,11 @@
+use std::fmt::Display;
+
 use serde::{Deserialize, Serialize};
+use sha1::digest::Output;
 use sha1::{Digest, Sha1};
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Sha1Hash([u8; 20]);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TorrentInfo {
@@ -8,10 +14,10 @@ pub struct TorrentInfo {
     #[serde(rename = "piece length")]
     pub piece_length: u32,
     #[serde(
-        deserialize_with = "list_of_arrays::deserialize_20",
-        serialize_with = "list_of_arrays::serialize_20"
+        deserialize_with = "list_of_hashes::deserialize",
+        serialize_with = "list_of_hashes::serialize"
     )]
-    pub pieces: Vec<[u8; 20]>,
+    pub pieces: Vec<Sha1Hash>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,7 +38,7 @@ impl TorrentFile {
 }
 
 impl TorrentInfo {
-    pub fn get_sha1(&self) -> [u8; 20] {
+    pub fn get_sha1(&self) -> Sha1Hash {
         let bytes = serde_bencode::to_bytes(self).unwrap();
 
         let mut hasher = Sha1::new();
@@ -41,16 +47,47 @@ impl TorrentInfo {
     }
 }
 
-mod list_of_arrays {
+impl From<[u8; 20]> for Sha1Hash {
+    fn from(value: [u8; 20]) -> Self {
+        Sha1Hash(value)
+    }
+}
+
+impl From<Output<Sha1>> for Sha1Hash {
+    fn from(value: Output<Sha1>) -> Self {
+        let mut array = [0; 20];
+        array.copy_from_slice(&value[..]);
+        Sha1Hash(array)
+    }
+}
+
+impl Display for Sha1Hash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(&self.0))
+    }
+}
+
+impl Sha1Hash {
+    pub fn iter(&self) -> std::slice::Iter<'_, u8> {
+        self.0.iter()
+    }
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+mod list_of_hashes {
     use std::fmt;
 
     use serde::de::Visitor;
     use serde::Deserializer;
 
-    struct ListOfArraysVisitor<const N: usize>;
+    use crate::torrent_data::Sha1Hash;
 
-    impl<'de, const N: usize> Visitor<'de> for ListOfArraysVisitor<N> {
-        type Value = Vec<[u8; N]>;
+    struct ListOfArraysVisitor;
+
+    impl<'de> Visitor<'de> for ListOfArraysVisitor {
+        type Value = Vec<Sha1Hash>;
 
         fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
             formatter.write_str("sdfgsdfg")
@@ -61,11 +98,11 @@ mod list_of_arrays {
             E: serde::de::Error,
         {
             let result: Self::Value = v
-                .chunks(N)
+                .chunks(20)
                 .map(|chunk| {
-                    let mut array = [0; N];
+                    let mut array = [0; 20];
                     array.copy_from_slice(chunk);
-                    array
+                    Sha1Hash(array)
                 })
                 .collect();
 
@@ -73,20 +110,20 @@ mod list_of_arrays {
         }
     }
 
-    pub(crate) fn deserialize_20<'de, D>(deserializer: D) -> Result<Vec<[u8; 20]>, D::Error>
+    pub(crate) fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Sha1Hash>, D::Error>
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_bytes(ListOfArraysVisitor::<20>)
+        deserializer.deserialize_bytes(ListOfArraysVisitor)
     }
 
-    pub(crate) fn serialize_20<S>(value: &Vec<[u8; 20]>, serializer: S) -> Result<S::Ok, S::Error>
+    pub(crate) fn serialize<S>(value: &Vec<Sha1Hash>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         let mut bytes: Vec<u8> = Vec::new();
-        for arr in value {
-            bytes.extend_from_slice(arr);
+        for hash in value {
+            bytes.extend_from_slice(&hash.0);
         }
 
         serializer.serialize_bytes(&bytes)
