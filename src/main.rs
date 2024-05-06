@@ -95,7 +95,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let torrent_filename = download_piece_matches
                 .get_one::<String>("torrent_file")
                 .expect("torrent_file is required");
-            let piece_index: u32 = download_piece_matches
+            let piece_index: usize = download_piece_matches
                 .get_one::<String>("piece_index")
                 .expect("piece_index is required")
                 .parse()?;
@@ -124,7 +124,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     let download_state = download_state.clone();
 
                     tokio::spawn(async move {
-                        peer_download(peer_addr, handshake.clone(), download_state)
+                        download_piece(peer_addr, handshake.clone(), download_state, piece_index)
                             .await
                             .unwrap_or_else(|e| eprintln!("Error: {}", e));
                     })
@@ -142,10 +142,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-async fn peer_download(
+async fn download_piece(
     peer_addr: SocketAddr,
     handshake: HandShake,
     mut download_state: SharedDownloadState,
+    piece_index: usize,
 ) -> Result<(), Box<dyn Error>> {
     let mut buf = BytesMut::with_capacity(BLOCK_SIZE + 128);
     let mut peer = Peer::connect(&peer_addr, &handshake).await?;
@@ -165,7 +166,7 @@ async fn peer_download(
     println!("Unchoke message received from {}", peer.peer_id);
 
     loop {
-        let block = download_state.next_block(0).await;
+        let block = download_state.next_block(piece_index).await;
         if block.is_none() {
             break;
         }

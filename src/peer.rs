@@ -235,6 +235,7 @@ impl SharedDownloadState {
                 state.done = true;
             }
 
+            let piece_index = 0;
             let file_offset = piece_index * state.pieces[piece_index].size + offset;
             let data = std::mem::take(&mut state.pieces[piece_index].data);
             let all_done = state.done;
