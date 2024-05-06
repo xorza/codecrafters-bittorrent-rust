@@ -2,7 +2,7 @@ use std::net::Ipv4Addr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::torrent_data::{Sha1Hash, TorrentFile};
+use crate::torrent_data::Sha1Hash;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrackerResponse {
@@ -16,31 +16,11 @@ pub struct TrackerResponse {
 
 pub struct TrackerRequest {
     pub info_hash: Sha1Hash,
-    pub peer_id: Sha1Hash,
+    pub peer_id: String,
     pub port: u16,
     pub uploaded: u64,
     pub downloaded: u64,
     pub left: u64,
-}
-
-impl From<TorrentFile> for TrackerRequest {
-    fn from(value: TorrentFile) -> Self {
-        let info_hash = value.info.get_sha1();
-        let peer_id = Sha1Hash::default();
-        let port = 6881;
-        let uploaded = 0;
-        let downloaded = 0;
-        let left = value.info.length as u64;
-
-        TrackerRequest {
-            info_hash,
-            peer_id,
-            port,
-            uploaded,
-            downloaded,
-            left,
-        }
-    }
 }
 
 pub async fn send_request(

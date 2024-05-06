@@ -8,7 +8,7 @@ use serde_json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::torrent_data::TorrentFile;
-use crate::tracker::TrackerResponse;
+use crate::tracker::{send_request, TrackerRequest};
 
 mod bencode_serialization;
 mod torrent_data;
@@ -47,35 +47,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "peers" => {
             let torrent_filename = &args[2].as_str();
             let torrent_file = TorrentFile::from_file(torrent_filename)?;
-
-            let info_sha1 = torrent_file.info.get_sha1();
-            let info_sha1_url = info_sha1
-                .iter()
-                .map(|b| format!("%{:02x}", b))
-                .collect::<String>();
-
-            let request_url = format!(
-                "{}?info_hash={}&{}",
-                torrent_file.announce.as_str(),
-                info_sha1_url,
-                serde_urlencoded::to_string(&[
-                    ("peer_id", PEER_ID),
-                    ("port", "6881"),
-                    ("uploaded", "0"),
-                    ("downloaded", "0"),
-                    ("left", torrent_file.info.length.to_string().as_str()),
-                    ("compact", "1"),
-                ])?
-            );
-            let client = reqwest::Client::new();
-            let response = client.get(request_url).send().await?;
-
-            if !response.status().is_success() {
-                return Err("Failed to get peers".into());
-            }
-
-            let bytes = response.bytes().await?;
-            let tracker_response: TrackerResponse = serde_bencode::from_bytes(&bytes)?;
+            let tracker_request = TrackerRequest {
+                info_hash: torrent_file.info.get_sha1(),
+                peer_id: PEER_ID.to_string(),
+                port: 6881,
+                uploaded: 0,
+                downloaded: 0,
+                left: torrent_file.info.length as u64,
+            };
+            let tracker_response =
+                send_request(tracker_request, torrent_file.announce.as_str()).await?;
 
             println!("Interval: {}", tracker_response.interval);
             println!("Peers:");
