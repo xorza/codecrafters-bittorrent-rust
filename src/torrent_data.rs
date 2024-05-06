@@ -9,10 +9,10 @@ pub struct Sha1Hash([u8; 20]);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TorrentInfo {
-    pub length: u32,
+    pub length: usize,
     pub name: String,
     #[serde(rename = "piece length")]
-    pub piece_length: u32,
+    pub piece_size: usize,
     #[serde(
         deserialize_with = "list_of_hashes::deserialize",
         serialize_with = "list_of_hashes::serialize"

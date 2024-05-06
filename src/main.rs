@@ -1,11 +1,14 @@
 #![allow(dead_code)]
 
 use std::error::Error;
+use std::net::SocketAddr;
 
+use bytes::{Buf, BufMut, BytesMut};
 use clap::{Arg, ArgMatches, Command};
 use serde_json;
+use tokio::task::JoinHandle;
 
-use crate::peer::{HandShake, Peer};
+use crate::peer::{HandShake, Message, Peer, SharedDownloadState};
 use crate::torrent_data::TorrentFile;
 use crate::tracker::{send_request, TrackerRequest};
 
@@ -16,6 +19,7 @@ mod tracker;
 mod utils;
 
 const PEER_ID: &str = "01234567890123456789";
+const BLOCK_SIZE: usize = 16 * 1024;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -40,7 +44,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             println!("Tracker URL: {}", torrent_file.announce);
             println!("Length: {}", torrent_file.info.length);
             println!("Info Hash: {}", info_sha1);
-            println!("Piece Length: {}", torrent_file.info.piece_length);
+            println!("Piece Length: {}", torrent_file.info.piece_size);
 
             println!("Piece Hashes:");
             for piece in torrent_file.info.pieces {
@@ -85,7 +89,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             println!("Peer ID: {}", peer.peer_id);
         }
         Some(("download_piece", download_piece_matches)) => {
-            let output = download_piece_matches
+            let output_filename = download_piece_matches
                 .get_one::<String>("output")
                 .expect("output is required");
             let torrent_filename = download_piece_matches
@@ -107,14 +111,94 @@ async fn main() -> Result<(), Box<dyn Error>> {
             };
             let tracker_response =
                 send_request(tracker_request, torrent_file.announce.as_str()).await?;
-            let peer_addr = tracker_response.peers[0];
             let handshake = HandShake::new(torrent_file.info.get_sha1(), PEER_ID.as_bytes().into());
-            let mut peer = Peer::connect(&peer_addr, &handshake).await?;
-            let message = peer.receive().await?;
+
+            let download_state =
+                SharedDownloadState::new(torrent_file, output_filename.clone(), BLOCK_SIZE);
+
+            let tasks: Vec<JoinHandle<()>> = tracker_response.peers[0..1]
+                .iter()
+                .map(|peer_addr| {
+                    let peer_addr = peer_addr.clone();
+                    let handshake = handshake.clone();
+                    let download_state = download_state.clone();
+
+                    tokio::spawn(async move {
+                        peer_download(peer_addr, handshake.clone(), download_state)
+                            .await
+                            .unwrap_or_else(|e| eprintln!("Error: {}", e));
+                    })
+                })
+                .collect();
+            for task in tasks {
+                task.await?;
+            }
         }
         _ => {
             println!("No subcommand was used, use --help to see available subcommands");
         }
+    }
+
+    Ok(())
+}
+
+async fn peer_download(
+    peer_addr: SocketAddr,
+    handshake: HandShake,
+    mut download_state: SharedDownloadState,
+) -> Result<(), Box<dyn Error>> {
+    let mut buf = BytesMut::with_capacity(BLOCK_SIZE + 128);
+    let mut peer = Peer::connect(&peer_addr, &handshake).await?;
+
+    let message = peer.receive(&mut buf).await?;
+    if message.id != 5 {
+        return Err("Expected bitfield message".into());
+    }
+    println!("Bitfield message received from: {}", peer.peer_id);
+
+    let interested_message = Message::new(2);
+    peer.send(&interested_message, &[]).await?;
+    let unchoke_message = peer.receive(&mut buf).await?;
+    if unchoke_message.id != 1 {
+        return Err("Expected unchoke message".into());
+    }
+    println!("Unchoke message received from {}", peer.peer_id);
+
+    loop {
+        let block = download_state.next_block(0).await;
+        if block.is_none() {
+            break;
+        }
+        let block = block.unwrap();
+
+        buf.clear();
+        buf.put_u32(block.piece_index as u32);
+        buf.put_u32(block.offset as u32);
+        buf.put_u32(block.length as u32);
+
+        let request_msg = Message::new(6);
+        peer.send(&request_msg, &buf).await?;
+
+        let piece_msg = peer.receive(&mut buf).await?;
+        if piece_msg.id != 7 {
+            return Err("Expected piece message".into());
+        }
+
+        let piece_index = buf.get_u32() as usize;
+        let offset = buf.get_u32() as usize;
+        let size = buf.len();
+
+        if piece_index != block.piece_index {
+            panic!("Received piece with wrong index: {}", piece_index);
+        }
+
+        download_state
+            .block_done(piece_index, block.index, offset, buf.to_vec())
+            .await?;
+        println!(
+            "Received piece: {} offset: {} bytes: {}",
+            piece_index, offset, size
+        );
     }
 
     Ok(())
