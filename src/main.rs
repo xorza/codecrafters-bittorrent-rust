@@ -1,11 +1,10 @@
 #![allow(dead_code)]
 
-use std::env;
 use std::error::Error;
 
-use bytes::BytesMut;
+use clap::{Arg, ArgMatches, Command};
 use serde_json;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncWriteExt, BufStream};
 
 use crate::peer::HandShake;
 use crate::torrent_data::TorrentFile;
@@ -21,18 +20,21 @@ const PEER_ID: &str = "01234567890123456789";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let args: Vec<String> = env::args().collect();
+    let matches = get_arg_matches();
 
-    let command = args[1].as_str();
-    match command {
-        "decode" => {
-            let encoded_value = args[2].as_bytes();
+    match matches.subcommand() {
+        Some(("decode", decode_matches)) => {
+            let encoded_value = decode_matches
+                .get_one::<String>("encoded_value")
+                .expect("encoded_value is required");
             let decoded_value: bencode_serialization::Value =
-                serde_bencode::from_bytes(encoded_value)?;
+                serde_bencode::from_bytes(encoded_value.as_bytes())?;
             println!("{}", serde_json::to_string(&decoded_value)?);
         }
-        "info" => {
-            let torrent_filename = &args[2].as_str();
+        Some(("info", info_matches)) => {
+            let torrent_filename = info_matches
+                .get_one::<String>("torrent_filename")
+                .expect("torrent_filename is required");
             let torrent_file = TorrentFile::from_file(torrent_filename)?;
             let info_sha1 = torrent_file.info.get_sha1();
 
@@ -46,8 +48,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("  {}", piece);
             }
         }
-        "peers" => {
-            let torrent_filename = &args[2].as_str();
+        Some(("peers", peers_matches)) => {
+            let torrent_filename = peers_matches
+                .get_one::<String>("torrent_filename")
+                .expect("torrent_filename is required");
             let torrent_file = TorrentFile::from_file(torrent_filename)?;
             let tracker_request = TrackerRequest {
                 info_hash: torrent_file.info.get_sha1(),
@@ -66,27 +70,98 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 println!("  {}:{}", ip, port);
             }
         }
-        "handshake" => {
-            let torrent_filename = args[2].as_str();
-            let peer_address = args[3].as_str();
+        Some(("handshake", handshake_matches)) => {
+            let torrent_filename = handshake_matches
+                .get_one::<String>("torrent_filename")
+                .expect("torrent_filename is required");
+            let peer_address = handshake_matches
+                .get_one::<String>("peer_address")
+                .expect("peer_address is required");
 
             let torrent_file = TorrentFile::from_file(torrent_filename)?;
-            let mut buf = BytesMut::with_capacity(256);
+
             let request = HandShake::new(torrent_file.info.get_sha1(), PEER_ID.as_bytes().into());
             let mut stream = tokio::net::TcpStream::connect(peer_address).await?;
+            let mut bufstream = BufStream::new(&mut stream);
 
-            request.write(&mut buf);
-            stream.write_all(&buf.split()).await?;
+            request.to_stream(&mut bufstream).await?;
+            bufstream.flush().await?;
 
-            let response = HandShake::read_async(&mut stream, &mut buf).await?;
+            let response = HandShake::from_stream(&mut stream).await?;
             println!("Peer ID: {}", response.peer_id);
         }
+        Some(("download_piece", download_piece_matches)) => {
+            let output = download_piece_matches
+                .get_one::<String>("output")
+                .expect("output is required");
+            let torrent_filename = download_piece_matches
+                .get_one::<String>("torrent_file")
+                .expect("torrent_file is required");
+            let piece_index = download_piece_matches
+                .get_one::<usize>("piece_index")
+                .expect("piece_index is required");
+
+            let torrent_file = TorrentFile::from_file(torrent_filename)?;
+        }
         _ => {
-            println!("unknown command: {}", command);
+            println!("No subcommand was used, use --help to see available subcommands");
         }
     }
 
     Ok(())
+}
+
+fn get_arg_matches() -> ArgMatches {
+    let matches = Command::new("codecrafters-bittorrent-rust")
+        .version("0.1")
+        .about("CodeCrafters BitTorrent Rust Challenge")
+        .subcommand_required(true)
+        .subcommand(
+            Command::new("decode")
+                .about("Decodes a bencoded value")
+                .arg(Arg::new("encoded_value").required(true)),
+        )
+        .subcommand(
+            Command::new("info")
+                .about("Prints information about a torrent file")
+                .arg(Arg::new("torrent_filename").required(true)),
+        )
+        .subcommand(
+            Command::new("peers")
+                .about("Prints peers from a tracker")
+                .arg(Arg::new("torrent_filename").required(true)),
+        )
+        .subcommand(
+            Command::new("handshake")
+                .about("Performs a handshake with a peer and prints the peer ID")
+                .arg(Arg::new("torrent_filename").required(true))
+                .arg(Arg::new("peer_address").required(true)),
+        )
+        .subcommand(
+            Command::new("download_piece")
+                .arg(
+                    Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .required(true)
+                        .value_name("FILE")
+                        .help("Sets the output file path"),
+                )
+                .arg(
+                    Arg::new("torrent_file")
+                        .help("The torrent file")
+                        .required(true)
+                        .index(1),
+                )
+                .arg(
+                    Arg::new("piece_index")
+                        .help("The index of the piece to download")
+                        .required(true)
+                        .index(2),
+                ),
+        )
+        .get_matches();
+    matches
 }
 
 #[cfg(test)]

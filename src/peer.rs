@@ -1,8 +1,5 @@
-use std::mem::size_of;
-
 use anyhow::anyhow;
-use bytes::{Buf, BufMut, BytesMut};
-use tokio::io::{AsyncRead, AsyncReadExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::torrent_data::Sha1Hash;
 
@@ -24,37 +21,40 @@ impl HandShake {
         }
     }
 
-    pub fn write<B: BufMut>(&self, buf: &mut B) {
-        buf.put_u8(self.protocol.len() as u8);
-        buf.put_slice(self.protocol.as_bytes());
-        buf.put_slice(&self.reserved);
-        buf.put_slice(self.info_hash.as_slice());
-        buf.put_slice(self.peer_id.as_slice());
+    pub async fn to_stream<S: AsyncWrite + Unpin>(&self, stream: &mut S) -> anyhow::Result<()>
+    where
+        S: AsyncWrite + Unpin,
+    {
+        stream.write_u8(self.protocol.len() as u8).await?;
+        stream.write_all(self.protocol.as_bytes()).await?;
+        stream.write_all(&self.reserved).await?;
+        stream.write_all(self.info_hash.as_slice()).await?;
+        stream.write_all(self.peer_id.as_slice()).await?;
+
+        Ok(())
     }
 
-    pub async fn read_async<S>(stream: &mut S, buf: &mut BytesMut) -> anyhow::Result<HandShake>
+    pub async fn from_stream<S>(stream: &mut S) -> anyhow::Result<HandShake>
     where
         S: AsyncRead + Unpin,
     {
         let proto_str_len = stream.read_u8().await? as usize;
+        let protocol = {
+            let mut buf = vec![0; proto_str_len];
+            stream.read_exact(&mut buf).await?;
 
-        let total_size = proto_str_len
-            + 8 //reserved
-            + size_of::<Sha1Hash>() //info_hash
-            + size_of::<Sha1Hash>(); //peer_id
-        buf.resize(total_size, 0u8);
-        stream.read_exact(buf.as_mut()).await?;
+            String::from_utf8(buf)?
+        };
 
-        let proto_name_str = String::from_utf8(buf.copy_to_bytes(proto_str_len).to_vec())?;
-        if proto_name_str != "BitTorrent protocol" {
+        if protocol != "BitTorrent protocol" {
             return Err(anyhow!("Invalid protocol name"));
         }
 
         let mut result = HandShake::default();
-        result.protocol = proto_name_str;
-        buf.copy_to_slice(&mut result.reserved);
-        buf.copy_to_slice(result.info_hash.as_mut());
-        buf.copy_to_slice(result.peer_id.as_mut());
+        result.protocol = protocol;
+        stream.read_exact(&mut result.reserved).await?;
+        stream.read_exact(result.info_hash.as_mut()).await?;
+        stream.read_exact(result.peer_id.as_mut()).await?;
 
         Ok(result)
     }
