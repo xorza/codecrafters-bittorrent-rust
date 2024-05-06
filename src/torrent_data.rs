@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha1::digest::Output;
 use sha1::{Digest, Sha1};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sha1Hash([u8; 20]);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

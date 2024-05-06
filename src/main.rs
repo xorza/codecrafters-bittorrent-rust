@@ -8,11 +8,13 @@ use clap::{Arg, ArgMatches, Command};
 use serde_json;
 use tokio::task::JoinHandle;
 
-use crate::peer::{HandShake, Message, Peer, SharedDownloadState};
+use crate::download::SharedDownloadState;
+use crate::peer::{HandShake, Message, Peer};
 use crate::torrent_data::TorrentFile;
 use crate::tracker::{send_request, TrackerRequest};
 
 mod bencode_serialization;
+mod download;
 mod peer;
 mod torrent_data;
 mod tracker;
