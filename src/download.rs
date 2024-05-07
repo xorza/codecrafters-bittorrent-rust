@@ -5,7 +5,8 @@ use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 
-use crate::torrent_data::{Sha1Hash, TorrentFile};
+use crate::peer::HandShake;
+use crate::torrent_data::{Sha1Hash, TorrentFile, TorrentInfo};
 
 #[derive(Debug)]
 pub struct BlockInfo {
@@ -15,183 +16,141 @@ pub struct BlockInfo {
     pub size: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PieceState {
+    pub index: usize,
     pub hash: Sha1Hash,
-    pub done: bool,
-    pub blocks: Vec<bool>,
     pub size: usize,
-    pub data: Vec<u8>,
+
+    pub done: bool,
+    pub in_progress: bool,
 }
 
 #[derive(Debug)]
 pub struct DownloadState {
+    pub handshake: HandShake,
+
     pub block_size: usize,
     pub piece_size: usize,
     pub pieces: Vec<PieceState>,
     pub done: bool,
 
-    pub output_filename: String,
     pub output_file: Option<File>,
 }
 
 #[derive(Clone)]
 pub struct SharedDownloadState(Arc<Mutex<DownloadState>>);
 
+impl PieceState {
+    pub fn new(torrent_info: &TorrentInfo, index: usize) -> Self {
+        assert!(index < torrent_info.pieces.len());
+
+        let size = if index == torrent_info.pieces.len() - 1 {
+            torrent_info.length % torrent_info.piece_size
+        } else {
+            torrent_info.piece_size
+        };
+
+        assert_ne!(size, 0);
+        assert!(size <= torrent_info.piece_size);
+
+        Self {
+            index,
+            hash: torrent_info.pieces[index].clone(),
+            done: false,
+            size,
+            in_progress: false,
+        }
+    }
+}
+
 impl SharedDownloadState {
-    pub fn new(torrent_file: TorrentFile, output_filename: String, block_size: usize) -> Self {
+    pub fn new(
+        torrent_file: TorrentFile,
+        handshake: HandShake,
+        output_file: File,
+        block_size: usize,
+    ) -> Self {
         assert_ne!(block_size, 0);
 
-        let pieces = torrent_file
-            .info
-            .pieces
-            .iter()
-            .enumerate()
-            .map(|(piece_index, hash)| {
-                let piece_size = if piece_index == torrent_file.info.pieces.len() - 1 {
-                    torrent_file.info.length % torrent_file.info.piece_size
-                } else {
-                    torrent_file.info.piece_size
-                };
-                let block_count = {
-                    let count = piece_size / block_size;
-                    if piece_size % block_size != 0 {
-                        count + 1
-                    } else {
-                        count
-                    }
-                };
-
-                assert_ne!(block_count, 0);
-                assert_ne!(piece_size, 0);
-
-                PieceState {
-                    hash: hash.clone(),
-                    done: false,
-                    blocks: vec![false; block_count],
-                    size: piece_size,
-                    data: Vec::new(),
-                }
-            })
+        let pieces = (0..torrent_file.info.pieces.len())
+            .map(|piece_index| PieceState::new(&torrent_file.info, piece_index))
             .collect();
 
         Self(Arc::new(Mutex::new(DownloadState {
+            handshake,
             block_size,
             piece_size: torrent_file.info.piece_size,
             pieces,
             done: false,
-            output_filename,
-            output_file: None,
+            output_file: Some(output_file),
         })))
     }
 
-    pub async fn next_block(&self, piece_index: usize) -> Option<BlockInfo> {
-        let this = self.0.lock().await;
+    pub async fn next_piece(&mut self) -> Option<PieceState> {
+        let mut this = self.0.lock().await;
 
-        if this.pieces[piece_index].done {
+        if this.done {
             return None;
         }
 
-        let piece = &this.pieces[piece_index];
-        let block_index = piece.blocks.iter().position(|&b| !b);
-        if block_index.is_none() {
-            panic!("Piece is not done");
-        }
+        let piece = this
+            .pieces
+            .iter_mut()
+            .find(|p| !p.done && !p.in_progress)
+            .expect("No pieces available");
+        piece.in_progress = true;
 
-        let block_index = block_index.unwrap();
-        let offset = block_index * this.block_size;
-        let size = if offset + this.block_size > piece.size {
-            piece.size % this.block_size
-        } else {
-            this.block_size
-        };
-
-        assert_ne!(size, 0);
-        assert!(offset <= piece.size);
-        assert!(offset + size <= piece.size);
-
-        Some(BlockInfo {
-            piece_index,
-            index: block_index,
-            offset,
-            size,
-        })
+        Some(piece.clone())
     }
 
-    pub async fn block_done(
-        &mut self,
-        piece_index: usize,
-        block_index: usize,
-        offset: usize,
-        data: Vec<u8>,
-    ) -> anyhow::Result<()> {
+    pub async fn piece_done(&mut self, piece: &PieceState, data: Vec<u8>) -> anyhow::Result<()> {
         let mut state = self.0.lock().await;
 
-        assert_eq!(state.done, false);
-        assert!(offset + data.len() <= state.piece_size);
-        assert!(piece_index < state.pieces.len());
-        assert!(data.len() <= state.block_size);
-        assert!(state.pieces[piece_index].blocks.len() >= block_index);
-        assert_eq!(state.pieces[piece_index].blocks[block_index], false);
+        assert!(!state.done);
+        assert!(data.len() <= piece.size);
 
-        let piece_done = {
-            let piece = &mut state.pieces[piece_index];
+        {
+            let piece_ref = &mut state.pieces[piece.index];
+            assert!(piece_ref.in_progress);
+            assert!(!piece_ref.done);
 
-            piece.blocks[block_index] = true;
-            if piece.data.is_empty() {
-                piece.data.resize(piece.size, 0);
+            piece_ref.in_progress = false;
+            let data_hash = Sha1Hash::from(sha1::Sha1::digest(&data));
+
+            if piece.hash != data_hash {
+                return Err(anyhow::format_err!("Piece hash mismatch"));
             }
 
-            piece.data.splice(offset..offset + data.len(), data);
+            piece_ref.done = true;
+        }
 
-            if piece.blocks.iter().all(|&b| b) {
-                let mut hasher = sha1::Sha1::new();
-                hasher.update(&piece.data);
-                let hash: Sha1Hash = hasher.finalize().into();
-                if hash != piece.hash {
-                    piece.blocks.fill(false);
-                } else {
-                    piece.done = true;
-                    piece.blocks = Vec::new();
-                }
-            }
+        if state.pieces.iter().all(|p| p.done) {
+            state.pieces = Vec::new();
+            state.done = true;
+        }
 
-            piece.done
-        };
+        state
+            .output_file
+            .as_mut()
+            .expect("File not available")
+            .write_all(&data)
+            .await?;
 
-        if piece_done {
-            if state.pieces.iter().all(|p| p.done) {
-                state.pieces = Vec::new();
-                state.done = true;
-            }
-
-            let data = std::mem::take(&mut state.pieces[piece_index].data);
-            let all_done = state.done;
-
-            {
-                let output_file = {
-                    if state.output_file.is_none() {
-                        let output_file = File::options()
-                            .create(true)
-                            .write(true)
-                            .truncate(true)
-                            .open(&state.output_filename)
-                            .await?;
-                        state.output_file = Some(output_file);
-                    }
-
-                    state.output_file.as_mut().unwrap()
-                };
-
-                output_file.write_all(&data).await?;
-            }
-
-            if all_done {
-                state.output_file.as_mut().unwrap().sync_all().await?;
-                state.output_file = None;
-            }
+        if state.done {
+            state
+                .output_file
+                .as_mut()
+                .expect("File not available")
+                .sync_all()
+                .await?;
+            state.output_file = None;
         }
 
         Ok(())
+    }
+
+    pub async fn handshake(&self) -> HandShake {
+        self.0.lock().await.handshake.clone()
     }
 }

@@ -6,7 +6,8 @@ use sha1::Digest;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream};
 use tokio::net::TcpStream;
 
-use crate::torrent_data::{Sha1Hash, TorrentFile};
+use crate::download::PieceState;
+use crate::torrent_data::Sha1Hash;
 use crate::BLOCK_SIZE;
 
 pub struct Peer {
@@ -92,33 +93,24 @@ impl Peer {
 
     pub async fn download_piece(
         &mut self,
-        torrent_file: &TorrentFile,
-        piece_index: usize,
+        piece: &PieceState,
         buf: &mut BytesMut,
     ) -> anyhow::Result<Vec<u8>> {
         assert!(self.connection.is_some());
 
-        let piece_size = {
-            if piece_index == torrent_file.info.pieces.len() - 1 {
-                torrent_file.info.length % torrent_file.info.piece_size
-            } else {
-                torrent_file.info.piece_size
-            }
-        };
-
-        let mut piece_data = vec![0u8; piece_size];
+        let mut piece_data = vec![0u8; piece.size];
         let mut downloaded = 0usize;
 
-        while downloaded < piece_size {
+        while downloaded < piece.size {
             let offset = downloaded;
-            let size = if offset + BLOCK_SIZE > piece_size {
-                piece_size - offset
+            let size = if offset + BLOCK_SIZE > piece.size {
+                piece.size - offset
             } else {
                 BLOCK_SIZE
             };
 
             buf.clear();
-            buf.put_u32(piece_index as u32);
+            buf.put_u32(piece.index as u32);
             buf.put_u32(offset as u32);
             buf.put_u32(size as u32);
 
@@ -134,15 +126,15 @@ impl Peer {
             let received_offset = buf.get_u32() as usize;
             let received_size = buf.len();
 
-            assert_eq!(received_piece_index, piece_index);
+            assert_eq!(received_piece_index, piece.index);
             assert_eq!(received_offset, offset);
 
             downloaded += received_size;
             piece_data[received_offset..received_offset + received_size].copy_from_slice(&buf[..]);
 
             println!(
-                "Received block: {} offset: {} bytes: {} piece: {}",
-                piece_index, offset, size, piece_index,
+                "Received piece: {} offset: {} bytes: {}",
+                piece.index, offset, size,
             )
         }
 
@@ -151,7 +143,7 @@ impl Peer {
             hasher.update(&piece_data);
             hasher.finalize().into()
         };
-        if torrent_file.info.pieces[piece_index] != calculated_hash {
+        if piece.hash != calculated_hash {
             return Err(anyhow!("Piece hash mismatch"));
         }
 

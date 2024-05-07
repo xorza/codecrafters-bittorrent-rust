@@ -1,13 +1,16 @@
 #![allow(dead_code)]
 
 use std::error::Error;
+use std::net::SocketAddr;
 
 use bytes::BytesMut;
 use clap::{Arg, ArgMatches, Command};
 use serde_json;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
+use tokio::task::JoinHandle;
 
+use crate::download::{PieceState, SharedDownloadState};
 use crate::peer::{HandShake, Peer};
 use crate::torrent_data::TorrentFile;
 use crate::tracker::{send_request, TrackerRequest};
@@ -125,9 +128,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let mut buf = BytesMut::with_capacity(BLOCK_SIZE + 128);
             peer.prepare_download(&mut buf).await?;
 
-            let data = peer
-                .download_piece(&torrent_file, piece_index, &mut buf)
-                .await?;
+            let piece = PieceState {
+                index: piece_index,
+                hash: torrent_file.info.pieces[piece_index].clone(),
+                done: false,
+                size: torrent_file.info.piece_size,
+                in_progress: false,
+            };
+
+            let data = peer.download_piece(&piece, &mut buf).await?;
 
             {
                 let mut output_file = File::options()
@@ -145,6 +154,57 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 piece_index, output_filename
             );
         }
+        Some(("download", download_matches)) => {
+            let output_filename = download_matches
+                .get_one::<String>("output")
+                .expect("output is required");
+            let torrent_filename = download_matches
+                .get_one::<String>("torrent_file")
+                .expect("torrent_file is required");
+
+            let torrent_file = TorrentFile::from_file(torrent_filename)?;
+            let tracker_request = TrackerRequest {
+                info_hash: torrent_file.info.get_sha1(),
+                peer_id: PEER_ID.to_string(),
+                port: 6881,
+                uploaded: 0,
+                downloaded: 0,
+                left: torrent_file.info.length as u64,
+            };
+            let tracker_response =
+                send_request(tracker_request, torrent_file.announce.as_str()).await?;
+            let handshake = HandShake::new(torrent_file.info.get_sha1(), PEER_ID.as_bytes().into());
+
+            let output_file = File::options()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&output_filename)
+                .await?;
+
+            let download_state =
+                SharedDownloadState::new(torrent_file, handshake, output_file, BLOCK_SIZE);
+
+            let tasks: Vec<JoinHandle<()>> = tracker_response.peers[1..2]
+                .iter()
+                .map(|peer_addr| {
+                    let peer_addr = peer_addr.clone();
+                    let download_state = download_state.clone();
+
+                    tokio::spawn(async move {
+                        let result = peer_thread(download_state, peer_addr).await;
+                        if let Err(err) = result {
+                            eprintln!("Error: {:?}", err);
+                        }
+                    })
+                })
+                .collect();
+            for task in tasks {
+                task.await?;
+            }
+
+            println!("Downloaded {} to {}.", torrent_filename, output_filename);
+        }
         _ => {
             println!("No subcommand was used, use --help to see available subcommands");
         }
@@ -153,43 +213,34 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-// let download_state =
-//     SharedDownloadState::new(torrent_file, output_filename.clone(), BLOCK_SIZE);
+async fn peer_thread(
+    mut download_state: SharedDownloadState,
+    peer_addr: SocketAddr,
+) -> anyhow::Result<()> {
+    let mut peer = Peer::new(peer_addr);
+    peer.connect(&download_state.handshake().await).await?;
 
-// let tasks: Vec<JoinHandle<()>> = tracker_response.peers[1..2]
-//     .iter()
-//     .map(|peer_addr| {
-//         let peer_addr = peer_addr.clone();
-//         let handshake = handshake.clone();
-//         let download_state = download_state.clone();
-//
-//         tokio::spawn(async move {
-//             download_piece(peer_addr, handshake.clone(), download_state, piece_index)
-//                 .await
-//                 .unwrap_or_else(|e| eprintln!("Error: {}", e));
-//         })
-//     })
-//     .collect();
-// for task in tasks {
-//     task.await?;
-// }
+    let peer_id = peer.connection.as_ref().unwrap().peer_id.to_string();
+    println!("Connected to peer: {}", peer_id);
 
-// loop {
-//     let block = download_state.next_block(piece_index).await;
-//     if block.is_none() {
-//         break;
-//     }
-//     let block = block.unwrap();
-//
-//
-//     download_state
-//         .block_done(piece_index, block.index, offset, buf.to_vec())
-//         .await?;
-//     println!(
-//         "Received block: {} offset: {} bytes: {} piece: {}",
-//         piece_index, offset, size, piece_index,
-//     );
-// }
+    let mut buf = BytesMut::with_capacity(BLOCK_SIZE + 128);
+    peer.prepare_download(&mut buf).await?;
+
+    loop {
+        let piece = download_state.next_piece().await;
+        if piece.is_none() {
+            break;
+        }
+        let piece = piece.unwrap();
+        let data = peer.download_piece(&piece, &mut buf).await?;
+
+        download_state.piece_done(&piece, data).await?;
+        println!("Downloaded piece: {}", piece.index);
+    }
+
+    println!("Downloaded all pieces from peer: {}", peer_id);
+    Ok(())
+}
 
 fn get_arg_matches() -> ArgMatches {
     let matches = Command::new("codecrafters-bittorrent-rust")
@@ -238,6 +289,23 @@ fn get_arg_matches() -> ArgMatches {
                         .help("The index of the piece to download")
                         .required(true)
                         .index(2),
+                ),
+        )
+        .subcommand(
+            Command::new("download")
+                .arg(
+                    Arg::new("output")
+                        .short('o')
+                        .long("output")
+                        .required(true)
+                        .value_name("FILE")
+                        .help("Sets the output file path"),
+                )
+                .arg(
+                    Arg::new("torrent_file")
+                        .help("The torrent file")
+                        .required(true)
+                        .index(1),
                 ),
         )
         .get_matches();
