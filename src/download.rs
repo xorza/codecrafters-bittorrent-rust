@@ -47,8 +47,8 @@ impl SharedDownloadState {
             .pieces
             .iter()
             .enumerate()
-            .map(|(index, hash)| {
-                let piece_size = if index == torrent_file.info.pieces.len() - 1 {
+            .map(|(piece_index, hash)| {
+                let piece_size = if piece_index == torrent_file.info.pieces.len() - 1 {
                     torrent_file.info.length % torrent_file.info.piece_size
                 } else {
                     torrent_file.info.piece_size
