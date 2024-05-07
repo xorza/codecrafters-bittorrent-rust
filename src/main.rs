@@ -242,13 +242,7 @@ async fn peer_download_piece(
     let mut buf = BytesMut::with_capacity(BLOCK_SIZE + 128);
     peer.prepare_download(&mut buf).await?;
 
-    let piece = PieceState {
-        index: piece_index,
-        hash: torrent_file.info.pieces[piece_index].clone(),
-        done: false,
-        size: torrent_file.info.piece_size,
-        in_progress: false,
-    };
+    let piece = PieceState::new(&torrent_file.info, piece_index);
     let data = peer.download_piece(&piece, &mut buf).await?;
     Ok(data)
 }
