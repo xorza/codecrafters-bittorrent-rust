@@ -1,49 +1,161 @@
 use std::net::SocketAddr;
 
 use anyhow::anyhow;
-use bytes::BytesMut;
+use bytes::{Buf, BufMut, BytesMut};
+use sha1::Digest;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream};
 use tokio::net::TcpStream;
 
-use crate::torrent_data::Sha1Hash;
+use crate::torrent_data::{Sha1Hash, TorrentFile};
+use crate::BLOCK_SIZE;
 
 pub struct Peer {
-    pub peer_id: Sha1Hash,
     pub addr: SocketAddr,
+    pub connection: Option<Connection>,
+}
+
+pub struct Connection {
+    pub peer_id: Sha1Hash,
     pub stream: BufStream<TcpStream>,
 }
 
 impl Peer {
-    pub async fn connect(addr: &SocketAddr, handshake: &HandShake) -> anyhow::Result<Self> {
-        let stream = TcpStream::connect(addr).await?;
+    pub fn new(addr: SocketAddr) -> Self {
+        Self {
+            addr,
+            connection: None,
+        }
+    }
+    pub async fn connect(&mut self, handshake: &HandShake) -> anyhow::Result<()> {
+        let stream = TcpStream::connect(self.addr).await?;
         let mut stream = BufStream::new(stream);
         handshake.to_stream(&mut stream).await?;
         stream.flush().await?;
 
         let handshake_reply = HandShake::from_stream(&mut stream).await?;
 
-        Ok(Self {
+        self.connection = Some(Connection {
             peer_id: handshake_reply.peer_id,
-            addr: addr.clone(),
             stream,
-        })
+        });
+
+        Ok(())
     }
+
     pub async fn receive(&mut self, buf: &mut BytesMut) -> anyhow::Result<Message> {
-        let message_length = self.stream.read_u32().await? as usize;
-        let message_id = self.stream.read_u8().await?;
+        assert!(self.connection.is_some());
+        let connection = self.connection.as_mut().unwrap();
+
+        let message_length = connection.stream.read_u32().await? as usize;
+        let message_id = connection.stream.read_u8().await?;
 
         buf.resize(message_length - 1, 0);
-        self.stream.read_exact(buf).await?;
+        connection.stream.read_exact(buf).await?;
 
         Ok(Message { id: message_id })
     }
     pub async fn send(&mut self, message: &Message, buf: &[u8]) -> anyhow::Result<()> {
-        self.stream.write_u32(buf.len() as u32 + 1).await?;
-        self.stream.write_u8(message.id).await?;
-        self.stream.write_all(&buf).await?;
-        self.stream.flush().await?;
+        assert!(self.connection.is_some());
+        let connection = self.connection.as_mut().unwrap();
+
+        connection.stream.write_u32(buf.len() as u32 + 1).await?;
+        connection.stream.write_u8(message.id).await?;
+        connection.stream.write_all(&buf).await?;
+        connection.stream.flush().await?;
 
         Ok(())
+    }
+
+    pub async fn prepare_download(&mut self, buf: &mut BytesMut) -> anyhow::Result<()> {
+        let message = self.receive(buf).await?;
+        if message.id != 5 {
+            return Err(anyhow!("Expected bitfield message"));
+        }
+        println!(
+            "Bitfield message received from: {}",
+            self.connection.as_ref().unwrap().peer_id
+        );
+
+        let interested_message = Message::new(2);
+        self.send(&interested_message, &[]).await?;
+        let unchoke_message = self.receive(buf).await?;
+        if unchoke_message.id != 1 {
+            return Err(anyhow!("Expected unchoke message"));
+        }
+        println!(
+            "Unchoke message received from {}",
+            self.connection.as_ref().unwrap().peer_id
+        );
+
+        Ok(())
+    }
+
+    pub async fn download_piece(
+        &mut self,
+        torrent_file: &TorrentFile,
+        piece_index: usize,
+        buf: &mut BytesMut,
+    ) -> anyhow::Result<Vec<u8>> {
+        assert!(self.connection.is_some());
+
+        let piece_size = {
+            if piece_index == torrent_file.info.pieces.len() - 1 {
+                torrent_file.info.length % torrent_file.info.piece_size
+            } else {
+                torrent_file.info.piece_size
+            }
+        };
+
+        let mut piece_data = vec![0u8; piece_size];
+        let mut downloaded = 0usize;
+
+        while downloaded < piece_size {
+            let offset = downloaded;
+            let size = if offset + BLOCK_SIZE > piece_size {
+                piece_size - offset
+            } else {
+                BLOCK_SIZE
+            };
+
+            buf.clear();
+            buf.put_u32(piece_index as u32);
+            buf.put_u32(offset as u32);
+            buf.put_u32(size as u32);
+
+            let request_msg = Message::new(6);
+            self.send(&request_msg, &buf).await?;
+
+            let piece_msg = self.receive(buf).await?;
+            if piece_msg.id != 7 {
+                return Err(anyhow!("Expected piece message"));
+            }
+
+            let received_piece_index = buf.get_u32() as usize;
+            let received_offset = buf.get_u32() as usize;
+            let received_size = buf.len();
+
+            assert_eq!(received_piece_index, piece_index);
+            assert_eq!(received_offset, offset);
+
+            downloaded += received_size;
+            piece_data[received_offset..received_offset + received_size].copy_from_slice(&buf[..]);
+
+            println!(
+                "Received block: {} offset: {} bytes: {} piece: {}",
+                piece_index, offset, size, piece_index,
+            )
+        }
+
+        let calculated_hash: Sha1Hash = {
+            let mut hasher = sha1::Sha1::new();
+            hasher.update(&piece_data);
+            hasher.finalize().into()
+        };
+        if torrent_file.info.pieces[piece_index] != calculated_hash {
+            return Err(anyhow!("Piece hash mismatch"));
+        }
+
+        Ok(piece_data)
     }
 }
 
