@@ -30,7 +30,7 @@ pub struct TorrentFile {
 }
 
 impl TorrentFile {
-    pub fn from_file(filename: &str) -> Result<TorrentFile, Box<dyn std::error::Error>> {
+    pub fn from_file(filename: &str) -> anyhow::Result<TorrentFile> {
         let bytes = std::fs::read(filename)?;
         let torrent_file: TorrentFile = serde_bencode::from_bytes(&bytes)?;
 

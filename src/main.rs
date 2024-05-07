@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use std::error::Error;
 use std::net::SocketAddr;
 
 use bytes::BytesMut;
@@ -24,9 +23,10 @@ mod utils;
 
 const PEER_ID: &str = "01234567890123456789";
 const BLOCK_SIZE: usize = 16 * 1024;
+const RETRY_COUNT: usize = 10;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> anyhow::Result<()> {
     let matches = get_arg_matches();
 
     match matches.subcommand() {
@@ -123,23 +123,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let handshake = HandShake::new(torrent_file.info.get_sha1(), PEER_ID.as_bytes().into());
 
             let peer_addr = tracker_response.peers[1];
-            let mut peer = Peer::new(peer_addr);
-            peer.connect(&handshake).await?;
-            let peer_id = peer.connection.as_ref().unwrap().peer_id.to_string();
-            println!("Connected to peer: {}", peer_id);
 
-            let mut buf = BytesMut::with_capacity(BLOCK_SIZE + 128);
-            peer.prepare_download(&mut buf).await?;
-
-            let piece = PieceState {
-                index: piece_index,
-                hash: torrent_file.info.pieces[piece_index].clone(),
-                done: false,
-                size: torrent_file.info.piece_size,
-                in_progress: false,
-            };
-
-            let data = peer.download_piece(&piece, &mut buf).await?;
+            let mut data: Option<Vec<u8>> = None;
+            for i in 0..RETRY_COUNT {
+                let result =
+                    peer_download_piece(piece_index, &torrent_file, &handshake, peer_addr).await;
+                match result {
+                    Ok(received_data) => {
+                        data = Some(received_data);
+                        break;
+                    }
+                    Err(err) => {
+                        if i < RETRY_COUNT - 1 {
+                            eprintln!("Retrying download from peer: {}", err);
+                        }
+                    }
+                }
+            }
+            let data = data.ok_or(anyhow::format_err!("Failed to download piece"))?;
 
             {
                 let mut output_file = File::options()
@@ -196,9 +197,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     let download_state = download_state.clone();
 
                     tokio::spawn(async move {
-                        let result = peer_thread(download_state, peer_addr).await;
-                        if let Err(err) = result {
-                            eprintln!("Error: {:?}", err);
+                        for i in 0..RETRY_COUNT {
+                            let result =
+                                peer_thread(download_state.clone(), peer_addr.clone()).await;
+                            match result {
+                                Ok(_) => break,
+                                Err(err) => {
+                                    if i == RETRY_COUNT - 1 {
+                                        eprintln!("Error downloading from peer: {}", err);
+                                    } else {
+                                        eprintln!("Retrying download from peer: {}", err);
+                                    }
+                                }
+                            }
                         }
                     })
                 })
@@ -215,6 +226,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+async fn peer_download_piece(
+    piece_index: usize,
+    torrent_file: &TorrentFile,
+    handshake: &HandShake,
+    peer_addr: SocketAddr,
+) -> anyhow::Result<Vec<u8>> {
+    let mut peer = Peer::new(peer_addr);
+    peer.connect(&handshake).await?;
+    let peer_id = peer.connection.as_ref().unwrap().peer_id.to_string();
+    println!("Connected to peer: {}", peer_id);
+
+    let mut buf = BytesMut::with_capacity(BLOCK_SIZE + 128);
+    peer.prepare_download(&mut buf).await?;
+
+    let piece = PieceState {
+        index: piece_index,
+        hash: torrent_file.info.pieces[piece_index].clone(),
+        done: false,
+        size: torrent_file.info.piece_size,
+        in_progress: false,
+    };
+    let data = peer.download_piece(&piece, &mut buf).await?;
+    Ok(data)
 }
 
 async fn peer_thread(
@@ -414,31 +450,36 @@ mod tests {
         serde_json::to_value(&decoded_value).unwrap()
     }
 
-    // #[test]
+    //#[test]
     fn test() {
-        let json = serde_json::json!({
-          "announce": "http://bittorrent-test-tracker.codecrafters.io/announce",
-          "created by": "mktorrent 1.1",
-          "info": {
-            "length": 2549700,
-            "name": "itsworking.gif",
-            "piece length": 262144,
-            "pieces": [
-              "01cc17bbe60fa5a52f64bd5f5b64d99286d50aa5",
-              "838f703cf7f6f08d1c497ed390df78f90d5f7566",
-              "45bf10974b5816491e30628b78a382ca36c4e05f",
-              "84be4bd855b34bcedc0c6e98f66d3e7c63353d1e",
-              "86427ac94d6e4f21a6d0d6c8b7ffa4c393c3b131",
-              "7c70cd5f44d1ac5505cb855d526ceb0f5f1cd5e3",
-              "3796ab05af1fa874173a0a6c1298625ad47b4fe6",
-              "272a8ff8fc865b053d974a78681414b38077d7b1",
-              "b07128d3a6018062bfe779db96d3a93c05fb81d4",
-              "7affc94f0985b985eb888a36ec92652821a21be4"
-            ]
-          }
-        });
+        let json = serde_json::json!(
+            {
+              "announce": "http://bittorrent-test-tracker.codecrafters.io/announce",
+              "created by": "mktorrent 1.1",
+              "info": {
+                "length": 2994120,
+                "name": "codercat.gif",
+                "piece length": 262144,
+                "pieces": [
+                  "3c34309faebf01e49c0f63c90b7edcc2259b6ad0",
+                  "b8519b2ea9bb373ff567f644428156c98a1d00fc",
+                  "9dc81366587536f48c2098a1d79692f2590fd9a6",
+                  "033c61e717f8c0d1e55850680eb451e3543b6203",
+                  "6f54e746ec369f65f32d45f77b1f1c37621fb965",
+                  "c656704b78107ed553bd0813f92fef780267c07b",
+                  "7431b8683137d20ff594b1f1bf3f8835165d68fb",
+                  "0432bd8e779608d27782b779c7738062e9b50ab5",
+                  "d6bc0409a0f3a9503857669d47fe752d4577ea00",
+                  "a86ee6abbc30cddb800a0b62d7a296111166d839",
+                  "783f52b70f0c902d56196bd3ee7f379b5db57e3b",
+                  "3d8db9e34db63b4ba1be27930911aa37b3f997dd"
+                ]
+              }
+            }
+
+        );
         let torrent_file: TorrentFile = serde_json::from_value(json).unwrap();
         let bencode = serde_bencode::to_bytes(&torrent_file).unwrap();
-        std::fs::write("sample1.torrent", &bencode).unwrap();
+        std::fs::write("sample2.torrent", &bencode).unwrap();
     }
 }
