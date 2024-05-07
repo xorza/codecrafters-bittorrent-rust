@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 
+use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 
 use crate::torrent_data::Sha1Hash;
@@ -26,7 +27,7 @@ pub struct TrackerRequest {
 pub async fn send_request(
     request: TrackerRequest,
     announce: &str,
-) -> Result<TrackerResponse, Box<dyn std::error::Error>> {
+) -> anyhow::Result<TrackerResponse> {
     let info_hash_url = request
         .info_hash
         .iter()
@@ -49,6 +50,10 @@ pub async fn send_request(
 
     let client = reqwest::Client::new();
     let response = client.get(request_url).send().await?;
+
+    if response.status() != 200 {
+        return Err(anyhow!("Tracker response status: {}", response.status()));
+    }
 
     let response_bytes = response.bytes().await?;
     let response: TrackerResponse = serde_bencode::from_bytes(&response_bytes)?;

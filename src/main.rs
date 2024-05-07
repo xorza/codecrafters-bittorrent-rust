@@ -107,6 +107,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .parse()?;
 
             let torrent_file = TorrentFile::from_file(torrent_filename)?;
+            let json = torrent_file.to_pretty_string();
+            println!("{}", json);
+
             let tracker_request = TrackerRequest {
                 info_hash: torrent_file.info.get_sha1(),
                 peer_id: PEER_ID.to_string(),
@@ -356,6 +359,30 @@ mod tests {
     }
 
     #[test]
+    fn test_torrent_file_from_json() {
+        let torrent_json = serde_json::json!({
+            "announce": "http://bittorrent-test-tracker.codecrafters.io/announce",
+            "created by": "mktorrent 1.1",
+            "info": {
+                "length": 92063,
+                "name": "sample.txt",
+                "piece length": 32768,
+                "pieces": [
+                  "e876f67a2a8886e8f36b136726c30fa29703022d",
+                  "6e2275e604a0766656736e81ff10b55204ad8d35",
+                  "f00d937a0213df1982bc8d097227ad9e909acc17"
+                ]
+            }
+        });
+        let torrent_file: TorrentFile = serde_json::from_value(torrent_json).unwrap();
+        assert_eq!(torrent_file.info.pieces.len(), 3);
+        assert_eq!(
+            torrent_file.info.pieces[0].to_string(),
+            "e876f67a2a8886e8f36b136726c30fa29703022d"
+        );
+    }
+
+    #[test]
     fn test_bencode_to_json() {
         assert_eq!(bencode_to_json("4:spam"), serde_json::json!("spam"));
 
@@ -385,5 +412,33 @@ mod tests {
     fn bencode_to_json(encoded_value: &str) -> serde_json::Value {
         let decoded_value: bencode::Value = serde_bencode::from_str(encoded_value).unwrap();
         serde_json::to_value(&decoded_value).unwrap()
+    }
+
+    // #[test]
+    fn test() {
+        let json = serde_json::json!({
+          "announce": "http://bittorrent-test-tracker.codecrafters.io/announce",
+          "created by": "mktorrent 1.1",
+          "info": {
+            "length": 2549700,
+            "name": "itsworking.gif",
+            "piece length": 262144,
+            "pieces": [
+              "01cc17bbe60fa5a52f64bd5f5b64d99286d50aa5",
+              "838f703cf7f6f08d1c497ed390df78f90d5f7566",
+              "45bf10974b5816491e30628b78a382ca36c4e05f",
+              "84be4bd855b34bcedc0c6e98f66d3e7c63353d1e",
+              "86427ac94d6e4f21a6d0d6c8b7ffa4c393c3b131",
+              "7c70cd5f44d1ac5505cb855d526ceb0f5f1cd5e3",
+              "3796ab05af1fa874173a0a6c1298625ad47b4fe6",
+              "272a8ff8fc865b053d974a78681414b38077d7b1",
+              "b07128d3a6018062bfe779db96d3a93c05fb81d4",
+              "7affc94f0985b985eb888a36ec92652821a21be4"
+            ]
+          }
+        });
+        let torrent_file: TorrentFile = serde_json::from_value(json).unwrap();
+        let bencode = serde_bencode::to_bytes(&torrent_file).unwrap();
+        std::fs::write("sample1.torrent", &bencode).unwrap();
     }
 }
