@@ -185,7 +185,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             let download_state =
                 SharedDownloadState::new(torrent_file, handshake, output_file, BLOCK_SIZE);
 
-            let tasks: Vec<JoinHandle<()>> = tracker_response.peers[1..2]
+            let tasks: Vec<JoinHandle<()>> = tracker_response
+                .peers
                 .iter()
                 .map(|peer_addr| {
                     let peer_addr = peer_addr.clone();

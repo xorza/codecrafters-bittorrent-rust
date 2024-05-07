@@ -1,8 +1,9 @@
+use std::io::SeekFrom;
 use std::sync::Arc;
 
 use sha1::Digest;
-use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
+use tokio::fs::*;
+use tokio::io::{AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
 use crate::peer::HandShake;
@@ -94,14 +95,15 @@ impl SharedDownloadState {
             return None;
         }
 
-        let piece = this
-            .pieces
-            .iter_mut()
-            .find(|p| !p.done && !p.in_progress)
-            .expect("No pieces available");
-        piece.in_progress = true;
+        let piece = this.pieces.iter_mut().find(|p| !p.done && !p.in_progress);
 
-        Some(piece.clone())
+        match piece {
+            Some(piece) => {
+                piece.in_progress = true;
+                Some(piece.clone())
+            }
+            None => return None,
+        }
     }
 
     pub async fn piece_done(&mut self, piece: &PieceState, data: Vec<u8>) -> anyhow::Result<()> {
@@ -130,20 +132,15 @@ impl SharedDownloadState {
             state.done = true;
         }
 
-        state
-            .output_file
-            .as_mut()
-            .expect("File not available")
-            .write_all(&data)
-            .await?;
+        {
+            let offset = (piece.index * state.piece_size) as u64;
+            let file = state.output_file.as_mut().expect("File expected");
+            file.seek(SeekFrom::Start(offset)).await?;
+            file.write_all(&data).await?;
+        }
 
         if state.done {
-            state
-                .output_file
-                .as_mut()
-                .expect("File not available")
-                .sync_all()
-                .await?;
+            state.output_file.as_mut().unwrap().sync_all().await?;
             state.output_file = None;
         }
 
